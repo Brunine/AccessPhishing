@@ -1,0 +1,47 @@
+openapi: 3.1.0
+info:
+  title: PhishForge Orchestrator API
+  version: 0.1.0
+  description: >
+    M1 core. Only the health endpoint is served today. Tenant, user, and
+    campaign resources exist at the repository layer and are exposed over HTTP
+    in a later M1 increment (RBAC middleware + audit hook already in place).
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness and database connectivity probe
+      responses:
+        "200":
+          description: Service healthy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+              example: { status: ok, db: ok, time: "2026-11-16T12:00:00Z" }
+        "503":
+          description: Dependency degraded (database unreachable)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+              example: { status: degraded, db: down, time: "2026-11-16T12:00:00Z" }
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, db, time]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        db:     { type: string, enum: [ok, down] }
+        time:   { type: string, format: date-time }
+    Problem:
+      description: RFC 7807 problem+json error body
+      type: object
+      required: [type, title, status]
+      properties:
+        type:     { type: string }
+        title:    { type: string }
+        status:   { type: integer }
+        detail:   { type: string }
+        instance: { type: string }

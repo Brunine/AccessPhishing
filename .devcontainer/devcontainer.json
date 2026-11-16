@@ -1,0 +1,30 @@
+{
+  "name": "phishforge",
+  "image": "mcr.microsoft.com/devcontainers/go:1.22",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers-extra/features/golang-migrate:1": {}
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y postgresql-client redis-tools && go install github.com/air-verse/air@latest",
+  "forwardPorts": [8080, 5432, 6379, 3000],
+  "portsAttributes": {
+    "8080": { "label": "API" },
+    "3000": { "label": "Web (Vite)" }
+  },
+  "containerEnv": {
+    "OLLAMA_HOST": "http://192.168.2.164:11434"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens",
+        "usernamehw.errorlens",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
+}

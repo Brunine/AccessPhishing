@@ -1,0 +1,22 @@
+# Secrets & data — NEVER commit
+.env
+*.key
+data/
+captures/
+backups/
+docs/targets/
+!docs/targets/.gitkeep
+
+# Go
+bin/
+*.exe
+*.test
+coverage.out
+
+# Node
+web/node_modules/
+web/dist/
+
+# OS / IDE
+.DS_Store
+*.swp
