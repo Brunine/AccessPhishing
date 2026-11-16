@@ -38,7 +38,7 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 
 ## MODULES (build order)
 - [ ] M1 Orchestrator core (API, schema, RBAC, audit)
-- [ ] M2 Target management (import, grouping, suppression, policies)
+- [x] M2 Target management (import, grouping, suppression, policies)
 - [ ] M3 Delivery engine (Postal SMTP, Graph/Gmail API injection, bounce ingest)
 - [ ] M4 Tracking (links, pixels, victim state machine webhooks)
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
@@ -57,6 +57,19 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M2 (target management) — COMPLETE. M1 complete.
+- Done (M2 target management):
+  - internal/contact, internal/group, internal/suppression repos (stateless,
+    tenant-scoped, pgx/v5). Contacts carry optional group + JSONB attributes.
+  - HTTP (operator, tenant-scoped from principal): /contacts (CRUD + bulk
+    /contacts/import), /contact-groups (CRUD-lite), /suppressions (add/list/
+    delete-by-email). Mutations audit; foreign-tenant group_id rejected 400.
+  - Bulk import is suppression-aware and dedupes on (tenant,email): returns
+    {created, duplicates, suppressed}; runs with its audit entry in one tx.
+  - devtools/seed CLI mints tenant+user+API key (one-time token).
+  - OpenAPI 0.3.0 covers all M2 endpoints + schemas.
+  - Tests: test/integration/targets_test.go (groups, contacts, import
+    counting, unsuppress→re-import, tenant isolation).
 - Milestone: M1 (orchestrator core) — COMPLETE.
 - Done (M1 core): repo scaffold, devcontainer, compose stack; Go module +
   cmd/api (chi, graceful shutdown, env config) + cmd/worker skeleton;

@@ -14,25 +14,34 @@ import (
 	"phishforge/internal/apikey"
 	"phishforge/internal/auth"
 	"phishforge/internal/campaign"
+	"phishforge/internal/contact"
+	"phishforge/internal/group"
 	"phishforge/internal/httpx"
+	"phishforge/internal/suppression"
 	"phishforge/internal/tenant"
 )
 
 // Server holds dependencies shared by HTTP handlers.
 type Server struct {
-	pool      *pgxpool.Pool
-	tenants   *tenant.Repository
-	campaigns *campaign.Repository
-	keys      *apikey.Service
+	pool         *pgxpool.Pool
+	tenants      *tenant.Repository
+	campaigns    *campaign.Repository
+	contacts     *contact.Repository
+	groups       *group.Repository
+	suppressions *suppression.Repository
+	keys         *apikey.Service
 }
 
 // NewServer constructs an API server over the given pool.
 func NewServer(pool *pgxpool.Pool) *Server {
 	return &Server{
-		pool:      pool,
-		tenants:   tenant.NewRepository(),
-		campaigns: campaign.NewRepository(),
-		keys:      apikey.NewService(pool),
+		pool:         pool,
+		tenants:      tenant.NewRepository(),
+		campaigns:    campaign.NewRepository(),
+		contacts:     contact.NewRepository(),
+		groups:       group.NewRepository(),
+		suppressions: suppression.NewRepository(),
+		keys:         apikey.NewService(pool),
 	}
 }
 
@@ -64,6 +73,27 @@ func (s *Server) Router() http.Handler {
 				r.Get("/", s.listCampaigns)
 				r.Get("/{id}", s.getCampaign)
 				r.Patch("/{id}", s.patchCampaignStatus)
+			})
+
+			// M2 target management (operator or above, tenant-scoped).
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/contacts", func(r chi.Router) {
+				r.Post("/", s.createContact)
+				r.Get("/", s.listContacts)
+				r.Post("/import", s.importContacts)
+				r.Get("/{id}", s.getContact)
+				r.Patch("/{id}", s.updateContact)
+				r.Delete("/{id}", s.deleteContact)
+			})
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/contact-groups", func(r chi.Router) {
+				r.Post("/", s.createGroup)
+				r.Get("/", s.listGroups)
+				r.Get("/{id}", s.getGroup)
+				r.Delete("/{id}", s.deleteGroup)
+			})
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/suppressions", func(r chi.Router) {
+				r.Post("/", s.addSuppression)
+				r.Get("/", s.listSuppressions)
+				r.Delete("/", s.deleteSuppression)
 			})
 		})
 	})

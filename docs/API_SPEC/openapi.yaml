@@ -1,12 +1,14 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.2.0
+  version: 0.3.0
   description: >
-    M1 core + HTTP API layer. Auth is an X-API-Key dev identifier backed by
-    hashed keys (api_keys). RBAC: tenants are admin-only (platform level);
-    campaigns require operator and are scoped to the caller's tenant (never a
-    query param). Every mutating endpoint writes an audit_log entry.
+    M1 core + HTTP API layer + M2 target management. Auth is an X-API-Key dev
+    identifier backed by hashed keys (api_keys). RBAC: tenants are admin-only
+    (platform level); campaigns, contacts, contact-groups and suppressions
+    require operator and are scoped to the caller's tenant (never a query
+    param). Imports skip suppressed addresses. Every mutating endpoint writes
+    an audit_log entry.
 servers:
   - url: /api/v1
 security:
@@ -177,6 +179,141 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /contacts:
+    post:
+      operationId: createContact
+      summary: Create a contact (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContactInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Contact" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listContacts
+      summary: List contacts in the caller's tenant (operator)
+      parameters:
+        - { name: group_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Contact" } } } } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /contacts/import:
+    post:
+      operationId: importContacts
+      summary: Bulk import contacts, skipping suppressed addresses (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contacts]
+              properties:
+                group_id: { type: string, format: uuid, description: applied to all imported contacts }
+                contacts: { type: array, items: { $ref: "#/components/schemas/ContactInput" } }
+      responses:
+        "200": { description: Import summary, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /contacts/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getContact
+      summary: Get a contact (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Contact" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateContact
+      summary: Replace a contact's fields (operator)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ContactInput" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Contact" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteContact
+      summary: Delete a contact (operator)
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /contact-groups:
+    post:
+      operationId: createGroup
+      summary: Create a contact group (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Group" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listGroups
+      summary: List contact groups (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Group" } } } } } } }
+
+  /contact-groups/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getGroup
+      summary: Get a contact group (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Group" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteGroup
+      summary: Delete a contact group; contacts are detached (operator)
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /suppressions:
+    post:
+      operationId: addSuppression
+      summary: Add (or update) a suppressed address (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [email], properties: { email: { type: string }, reason: { type: string } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Suppression" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listSuppressions
+      summary: List suppressed addresses (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Suppression" } } } } } } }
+    delete:
+      operationId: deleteSuppression
+      summary: Remove a suppressed address by email (operator)
+      parameters:
+        - { name: email, in: query, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -220,6 +357,51 @@ components:
         created_by: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    ContactInput:
+      type: object
+      required: [email]
+      properties:
+        email:      { type: string }
+        first_name: { type: string }
+        last_name:  { type: string }
+        phone:      { type: string }
+        group_id:   { type: string, format: uuid, nullable: true }
+        attributes: { type: object, additionalProperties: true }
+    Contact:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        group_id:   { type: string, format: uuid, nullable: true }
+        email:      { type: string }
+        first_name: { type: string, nullable: true }
+        last_name:  { type: string, nullable: true }
+        phone:      { type: string, nullable: true }
+        attributes: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ImportResult:
+      type: object
+      properties:
+        created:     { type: integer }
+        duplicates:  { type: integer }
+        suppressed:  { type: integer }
+        created_ids: { type: array, items: { type: string, format: uuid } }
+    Group:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        name:       { type: string }
+        created_at: { type: string, format: date-time }
+    Suppression:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        email:      { type: string }
+        reason:     { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
     Problem:
       type: object
       required: [type, title, status]
