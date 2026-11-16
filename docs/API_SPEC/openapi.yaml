@@ -1,18 +1,22 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.1.0
+  version: 0.2.0
   description: >
-    M1 core. Only the health endpoint is served today. Tenant, user, and
-    campaign resources exist at the repository layer and are exposed over HTTP
-    in a later M1 increment (RBAC middleware + audit hook already in place).
+    M1 core + HTTP API layer. Auth is an X-API-Key dev identifier backed by
+    hashed keys (api_keys). RBAC: tenants are admin-only (platform level);
+    campaigns require operator and are scoped to the caller's tenant (never a
+    query param). Every mutating endpoint writes an audit_log entry.
 servers:
   - url: /api/v1
+security:
+  - ApiKeyAuth: []
 paths:
   /health:
     get:
       operationId: getHealth
       summary: Liveness and database connectivity probe
+      security: []
       responses:
         "200":
           description: Service healthy
@@ -25,8 +29,167 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
-              example: { status: degraded, db: down, time: "2026-11-16T12:00:00Z" }
+
+  /tenants:
+    post:
+      operationId: createTenant
+      summary: Create a tenant (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name: { type: string }
+                slug: { type: string }
+            example: { name: "Acme Corp", slug: "acme" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listTenants
+      summary: List tenants (admin)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Tenant" } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /tenants/{id}:
+    get:
+      operationId: getTenant
+      summary: Get a tenant (admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tenant" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /campaigns:
+    post:
+      operationId: createCampaign
+      summary: Create a campaign in the caller's tenant (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+            example: { name: "Q4 Awareness Sim" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Campaign" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listCampaigns
+      summary: List the caller's tenant campaigns (operator)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Campaign" } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}:
+    get:
+      operationId: getCampaign
+      summary: Get a campaign in the caller's tenant (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Campaign" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateCampaignStatus
+      summary: Transition a campaign's status (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: "#/components/schemas/CampaignStatus" }
+            example: { status: "running" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Campaign" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Token of the form "pf_<keyID>.<secret>".
+  responses:
+    Problem:
+      description: RFC 7807 error
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
   schemas:
     Health:
       type: object
@@ -35,8 +198,29 @@ components:
         status: { type: string, enum: [ok, degraded] }
         db:     { type: string, enum: [ok, down] }
         time:   { type: string, format: date-time }
+    CampaignStatus:
+      type: string
+      enum: [draft, scheduled, running, paused, completed, archived]
+    Tenant:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        slug:       { type: string }
+        status:     { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Campaign:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        name:       { type: string }
+        status:     { $ref: "#/components/schemas/CampaignStatus" }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Problem:
-      description: RFC 7807 problem+json error body
       type: object
       required: [type, title, status]
       properties:

@@ -9,7 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+
+	"phishforge/internal/db"
 )
 
 // ErrNotFound is returned when a tenant does not exist.
@@ -25,13 +26,12 @@ type Tenant struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Repository provides tenant persistence over a pgx pool.
-type Repository struct {
-	pool *pgxpool.Pool
-}
+// Repository provides tenant persistence. It is stateless; each method takes a
+// db.Querier (pool or transaction).
+type Repository struct{}
 
-// NewRepository returns a tenant repository backed by pool.
-func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+// NewRepository returns a tenant repository.
+func NewRepository() *Repository { return &Repository{} }
 
 const tenantColumns = `id, name, slug, status, created_at, updated_at`
 
@@ -44,9 +44,9 @@ func scanTenant(row pgx.Row) (Tenant, error) {
 }
 
 // Create inserts a new tenant and returns the stored row.
-func (r *Repository) Create(ctx context.Context, name, slug string) (Tenant, error) {
-	const q = `INSERT INTO tenants (name, slug) VALUES ($1, $2) RETURNING ` + tenantColumns
-	t, err := scanTenant(r.pool.QueryRow(ctx, q, name, slug))
+func (r *Repository) Create(ctx context.Context, q db.Querier, name, slug string) (Tenant, error) {
+	const sql = `INSERT INTO tenants (name, slug) VALUES ($1, $2) RETURNING ` + tenantColumns
+	t, err := scanTenant(q.QueryRow(ctx, sql, name, slug))
 	if err != nil {
 		return Tenant{}, fmt.Errorf("tenant: create: %w", err)
 	}
@@ -54,9 +54,9 @@ func (r *Repository) Create(ctx context.Context, name, slug string) (Tenant, err
 }
 
 // GetByID loads a tenant by id, or ErrNotFound.
-func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (Tenant, error) {
-	const q = `SELECT ` + tenantColumns + ` FROM tenants WHERE id = $1`
-	t, err := scanTenant(r.pool.QueryRow(ctx, q, id))
+func (r *Repository) GetByID(ctx context.Context, q db.Querier, id uuid.UUID) (Tenant, error) {
+	const sql = `SELECT ` + tenantColumns + ` FROM tenants WHERE id = $1`
+	t, err := scanTenant(q.QueryRow(ctx, sql, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tenant{}, ErrNotFound
 	}
@@ -67,15 +67,15 @@ func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (Tenant, error) 
 }
 
 // List returns tenants ordered by creation time, newest first.
-func (r *Repository) List(ctx context.Context, limit, offset int) ([]Tenant, error) {
-	const q = `SELECT ` + tenantColumns + ` FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2`
-	rows, err := r.pool.Query(ctx, q, limit, offset)
+func (r *Repository) List(ctx context.Context, q db.Querier, limit, offset int) ([]Tenant, error) {
+	const sql = `SELECT ` + tenantColumns + ` FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	rows, err := q.Query(ctx, sql, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("tenant: list: %w", err)
 	}
 	defer rows.Close()
 
-	var out []Tenant
+	out := make([]Tenant, 0)
 	for rows.Next() {
 		t, err := scanTenant(rows)
 		if err != nil {

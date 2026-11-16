@@ -7,7 +7,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+
+	"phishforge/internal/db"
 )
 
 // Entry is a single audit record. TenantID and Action are required; the actor
@@ -22,17 +23,10 @@ type Entry struct {
 	Metadata   map[string]any
 }
 
-// Logger writes audit entries using a shared connection pool.
-type Logger struct {
-	pool *pgxpool.Pool
-}
-
-// NewLogger returns a Logger backed by pool.
-func NewLogger(pool *pgxpool.Pool) *Logger { return &Logger{pool: pool} }
-
-// Record persists e. The audit_log table is append-only; writes never update
-// or delete existing rows.
-func (l *Logger) Record(ctx context.Context, e Entry) error {
+// Write persists e using q (pool or transaction). Passing the same transaction
+// as the mutation it describes makes the action and its audit entry atomic.
+// The audit_log table is append-only.
+func Write(ctx context.Context, q db.Querier, e Entry) error {
 	if e.TenantID == uuid.Nil {
 		return fmt.Errorf("audit: tenant id is required")
 	}
@@ -44,24 +38,20 @@ func (l *Logger) Record(ctx context.Context, e Entry) error {
 	if e.ActorID != uuid.Nil {
 		actorID = e.ActorID
 	}
-	var actorEmail any
-	if e.ActorEmail != "" {
-		actorEmail = e.ActorEmail
-	}
-	var meta []byte
+	var meta any
 	if e.Metadata != nil {
 		b, err := json.Marshal(e.Metadata)
 		if err != nil {
 			return fmt.Errorf("audit: marshal metadata: %w", err)
 		}
-		meta = b
+		meta = string(b)
 	}
 
-	const q = `
+	const sql = `
 INSERT INTO audit_log (tenant_id, actor_id, actor_email, action, target_type, target_id, metadata)
-VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	if _, err := l.pool.Exec(ctx, q,
-		e.TenantID, actorID, actorEmail, e.Action,
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`
+	if _, err := q.Exec(ctx, sql,
+		e.TenantID, actorID, nullIfEmpty(e.ActorEmail), e.Action,
 		nullIfEmpty(e.TargetType), nullIfEmpty(e.TargetID), meta,
 	); err != nil {
 		return fmt.Errorf("audit: insert: %w", err)

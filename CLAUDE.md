@@ -57,18 +57,30 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
-- Milestone: M1 (orchestrator core)
-- Done: repo scaffold, devcontainer, compose stack; Go module + cmd/api
-  (chi, /api/v1/health, graceful shutdown, env config) + cmd/worker skeleton;
-  migrations 0001 (core schema: tenants/users/campaigns/contacts/groups/
-  suppression/append-only events/templates/configs/approvals/audit_log) and
-  0002 (tenant_policies + tenant_encryption_keys key-ID refs, default-policy
-  trigger); repository layer (internal/tenant, internal/campaign, pgx/v5);
-  RBAC middleware (internal/auth); audit hook (internal/audit);
-  RFC 7807 helpers (internal/httpx); OpenAPI stub for /health.
-- In progress: wiring tenant/campaign repos to HTTP routes behind RBAC + audit.
-- Next: HTTP CRUD for tenants/users/campaigns; events repo + state-machine
-  transitions; integration tests against ephemeral Postgres.
-- Verification: `go mod tidy` + `go build ./... && go vet ./...` pass clean
-  (Go 1.27.4; go.sum committed). Requires a reachable DATABASE_URL at runtime.
+- Milestone: M1 (orchestrator core) — COMPLETE.
+- Done (M1 core): repo scaffold, devcontainer, compose stack; Go module +
+  cmd/api (chi, graceful shutdown, env config) + cmd/worker skeleton;
+  migrations 0001 (core schema) + 0002 (tenant_policies + key-ID refs);
+  repository layer; RBAC middleware; audit hook; RFC 7807 helpers.
+- Done (M1 HTTP API layer):
+  - Auth: X-API-Key dev identifier (internal/apikey) — bcrypt-hashed keys,
+    token "pf_<keyID>.<secret>" (plaintext shown once), Verify/Create/Revoke,
+    audit on create+revoke. Migration 0003 (api_keys, hashed, partial index).
+  - Shared db.Querier (internal/db) so mutations + their audit entry commit in
+    one transaction; repos refactored to stateless (pool-or-tx).
+  - Routes behind Authenticate + RequireRole: /api/v1/tenants (admin,
+    platform-level: POST/GET list/GET {id}); /api/v1/campaigns (operator,
+    tenant-scoped from principal: POST/GET list/GET {id}/PATCH status). Tenant
+    scope comes from the principal, never a query param. Every mutation audits.
+  - events repo (internal/events): Append() with monotonic state-machine
+    validation (sent→delivered→opened→clicked→creds→session_hijacked→
+    post_exploitation; bounced/failed early-terminal; reported side-channel),
+    updates campaign_targets.state in the same transaction.
+  - docs/API_SPEC/openapi.yaml updated (0.2.0) with all endpoints + ApiKeyAuth.
+- Verification: `go build ./... && go vet ./... && go test ./...` all clean
+  (Go 1.27.4). Integration test (test/integration) runs against a throwaway DB
+  built from migrations (set TEST_DATABASE_URL to a maintenance DSN); covers
+  tenant→key→campaign→event→state + RBAC 401/403 + invalid-transition. Dev DB
+  at schema_migrations version 3; live API verified on :8080.
+- Next: M2 (target management) — NOT STARTED (per instruction).
 - Open decisions: (none — log in docs/ADR.md when made)
