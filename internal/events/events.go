@@ -152,6 +152,42 @@ type Repository struct {
 // NewRepository returns an events repository backed by pool.
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
+// ListByTenant returns a tenant's most recent events (newest first), for the
+// dashboard activity feed. State is not projected here (it is per-target); the
+// Event.State field is left empty.
+func (r *Repository) ListByTenant(ctx context.Context, tenantID uuid.UUID, limit int) ([]Event, error) {
+	const sql = `
+SELECT id, tenant_id, campaign_id, contact_id, type::text, occurred_at, created_at
+FROM events WHERE tenant_id = $1 ORDER BY occurred_at DESC LIMIT $2`
+	rows, err := r.pool.Query(ctx, sql, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("events: list by tenant: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Event, 0)
+	for rows.Next() {
+		var (
+			ev      Event
+			typeStr string
+			cu      uuid.NullUUID
+		)
+		if err := rows.Scan(&ev.ID, &ev.TenantID, &ev.CampaignID, &cu, &typeStr, &ev.OccurredAt, &ev.CreatedAt); err != nil {
+			return nil, fmt.Errorf("events: scan: %w", err)
+		}
+		ev.Type = Type(typeStr)
+		if cu.Valid {
+			id := cu.UUID
+			ev.ContactID = &id
+		}
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("events: iterate: %w", err)
+	}
+	return out, nil
+}
+
 // Append validates the transition, inserts the event, and updates the target's
 // projected state — all in one transaction. It returns ErrInvalidTransition if
 // the event is not allowed from the current state.

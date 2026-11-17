@@ -45,7 +45,8 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
 - [ ] M6 LLM service (Ollama client, prompt templates, approval workflow)
 - [ ] M7 OSINT (subfinder/amass, dnstwist, registrar APIs, reputation checks)
-- [ ] M8 Dashboard (timelines, KPIs, executive PDF, tenant portals)
+- [~] M8 Dashboard (web/ operator console done; timelines, KPIs, executive PDF,
+      tenant portals still TODO)
 - [ ] M9 Secondary vectors (SMS, QR, BitB injects, Asterisk vishing + local TTS)
 - [ ] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
 
@@ -58,6 +59,39 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M8-lite operator dashboard (web/) — COMPLETE (first version).
+  M5 NOT STARTED (per instruction).
+- Done (M8-lite dashboard):
+  - web/ = React 18 + TypeScript + Vite 5 + Tailwind 3 SPA. Thin fetch client
+    (web/src/api/client.ts) sends X-API-Key from localStorage; RFC 7807 errors
+    surfaced as ApiError (status/title/detail). Key-entry gate (no login
+    backend); role probed via GET /tenants (admin) → GET /campaigns (operator)
+    → viewer, cached, never transmitted. react-router views.
+  - Views: Tenants (admin list/create), Contacts & Groups (CRUD + client-side
+    CSV parse → suppression-aware /contacts/import, shows created/dup/suppressed),
+    Campaigns (list/create), Campaign detail (launch w/ group+template+profile
+    selectors; links view; send button surfacing the 403 approval-gate inline;
+    per-recipient state table), Templates (create/edit, {{.first_name}}/{{.link}}),
+    Sending Profiles (create; password write-only), Approvals (list; approve/
+    reject disabled for non-admins), Activity (audit + events feed).
+  - Vite dev server proxies /api/v1 → http://localhost:8080 (VITE_API_TARGET
+    override); no CORS. web/README.md documents npm/pnpm commands (no make).
+  - Backend additions (read-only, operator, tenant-scoped) to back the required
+    detail/feed views — the only new endpoints, noted as a scoped exception to
+    "no new backend endpoints": GET /campaigns/{id}/targets (recipients joined
+    with campaign_targets state, COALESCE 'pending') via recipient.
+    ListStateByCampaign; GET /activity (audit.List + events.ListByTenant).
+    OpenAPI kept at 0.5.0 with both documented + a note (no existing contract
+    changed).
+  - Verification: `npm run build` clean (tsc --noEmit + vite build, 47 modules);
+    Go `build/vet/test` clean (integration 5.2s). Live smoke (seeded admin key,
+    API on :8080) drove the full UI loop: group+2 contacts → template+profile
+    (password absent from response) → campaign → launch (2 recipients) → links →
+    public /t click recorded → /targets shows pending+clicked → send 403 pre-
+    approval → admin approve → send 202 → /activity shows 11 audit actions + the
+    clicked event. (Actual SMTP 'sent' events need the worker + an SMTP host;
+    that delivery path is covered by test/integration/delivery_test.go, not driven
+    in this live smoke.)
 - Milestone: M3-lite delivery engine — COMPLETE. Launch/tracking, M2, M1 done.
   M5 NOT STARTED (per instruction).
 - Done (M3-lite delivery):

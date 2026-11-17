@@ -111,8 +111,12 @@ func (s *Server) Router() http.Handler {
 				r.Patch("/{id}", s.patchCampaignStatus)
 				r.Post("/{id}/launch", s.launchCampaign)
 				r.Get("/{id}/links", s.campaignLinks)
+				r.Get("/{id}/targets", s.campaignTargets)
 				r.Post("/{id}/send", s.sendCampaign)
 			})
+
+			// Dashboard activity feed: recent audit entries + events (operator).
+			r.With(auth.RequireRole(auth.RoleOperator)).Get("/activity", s.activity)
 
 			// M3 delivery: templates, sending profiles, approvals (operator).
 			r.With(auth.RequireRole(auth.RoleOperator)).Route("/templates", func(r chi.Router) {

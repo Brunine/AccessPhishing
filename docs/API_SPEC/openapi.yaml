@@ -13,6 +13,9 @@ info:
     that renders the template per recipient and records sent/failed events.
     Public /t and /px tracking routes are token-authenticated and rate limited.
     Every mutating operator endpoint writes an audit_log entry.
+    Version kept at 0.5.0: the M8-lite dashboard added two read-only operator
+    endpoints — GET /campaigns/{id}/targets and GET /activity — without changing
+    any existing contract.
 servers:
   - url: /api/v1
 security:
@@ -259,6 +262,86 @@ paths:
         "403": { description: Template not approved, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { description: Campaign not in 'scheduled', content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /campaigns/{id}/targets:
+    get:
+      operationId: campaignTargets
+      summary: Per-recipient projected state for a campaign (operator)
+      description: >
+        Read-only. Recipients joined with their current campaign_targets state
+        (defaulting to 'pending'). Added in 0.5.0 (unversioned bump) to back the
+        M8-lite dashboard campaign-detail view.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        contact_id:    { type: string, format: uuid }
+                        email:         { type: string }
+                        first_name:    { type: string, nullable: true }
+                        token:         { type: string }
+                        state:         { type: string, enum: [pending, sent, delivered, opened, clicked, creds, session_hijacked, post_exploitation, bounced, failed] }
+                        last_event_at: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /activity:
+    get:
+      operationId: activity
+      summary: Recent audit entries and events for the tenant (operator)
+      description: >
+        Read-only dashboard activity feed. Added in 0.5.0 (unversioned bump) to
+        back the M8-lite dashboard. Returns the most recent audit_log entries and
+        victim-state events for the authenticated tenant.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50, maximum: 500 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  audit:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:          { type: string, format: uuid }
+                        actor_email: { type: string, nullable: true }
+                        action:      { type: string }
+                        target_type: { type: string, nullable: true }
+                        target_id:   { type: string, nullable: true }
+                        metadata:    { type: object, additionalProperties: true, nullable: true }
+                        created_at:  { type: string, format: date-time }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:          { type: string, format: uuid }
+                        campaign_id: { type: string, format: uuid }
+                        contact_id:  { type: string, format: uuid, nullable: true }
+                        type:        { type: string }
+                        occurred_at: { type: string, format: date-time }
+                        created_at:  { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /templates:
     post:

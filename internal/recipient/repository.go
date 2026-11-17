@@ -126,6 +126,51 @@ func (r *Repository) ListByCampaign(ctx context.Context, q db.Querier, tenantID,
 	return out, nil
 }
 
+// TargetView is a recipient joined with its contact and projected state, for
+// the campaign-detail view. State is the campaign_targets cache, defaulting to
+// 'pending' before any event has been recorded for the contact.
+type TargetView struct {
+	ContactID   uuid.UUID  `json:"contact_id"`
+	Email       string     `json:"email"`
+	FirstName   *string    `json:"first_name,omitempty"`
+	Token       string     `json:"token"`
+	State       string     `json:"state"`
+	LastEventAt *time.Time `json:"last_event_at,omitempty"`
+}
+
+// ListStateByCampaign returns a campaign's recipients joined with their current
+// projected state (campaign_targets), ordered by email. Recipients with no
+// target row yet report 'pending'.
+func (r *Repository) ListStateByCampaign(ctx context.Context, q db.Querier, tenantID, campaignID uuid.UUID) ([]TargetView, error) {
+	const sql = `
+SELECT r.contact_id, c.email, c.first_name, r.token,
+       COALESCE(ct.state::text, 'pending') AS state, ct.last_event_at
+FROM recipients r
+JOIN contacts c ON c.id = r.contact_id
+LEFT JOIN campaign_targets ct
+       ON ct.campaign_id = r.campaign_id AND ct.contact_id = r.contact_id
+WHERE r.tenant_id = $1 AND r.campaign_id = $2
+ORDER BY c.email`
+	rows, err := q.Query(ctx, sql, tenantID, campaignID)
+	if err != nil {
+		return nil, fmt.Errorf("recipient: list state: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]TargetView, 0)
+	for rows.Next() {
+		var v TargetView
+		if err := rows.Scan(&v.ContactID, &v.Email, &v.FirstName, &v.Token, &v.State, &v.LastEventAt); err != nil {
+			return nil, fmt.Errorf("recipient: scan state: %w", err)
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("recipient: iterate state: %w", err)
+	}
+	return out, nil
+}
+
 // GetByToken resolves a public token to its recipient (global lookup), or
 // ErrNotFound. The token is the credential, so no tenant scoping is applied.
 func (r *Repository) GetByToken(ctx context.Context, q db.Querier, token string) (Recipient, error) {
