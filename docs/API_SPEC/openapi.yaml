@@ -1,14 +1,16 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.3.0
+  version: 0.4.0
   description: >
-    M1 core + HTTP API layer + M2 target management. Auth is an X-API-Key dev
-    identifier backed by hashed keys (api_keys). RBAC: tenants are admin-only
-    (platform level); campaigns, contacts, contact-groups and suppressions
-    require operator and are scoped to the caller's tenant (never a query
-    param). Imports skip suppressed addresses. Every mutating endpoint writes
-    an audit_log entry.
+    M1 core + HTTP API layer + M2 target management + campaign launch and
+    recipient tracking. Auth is an X-API-Key dev identifier backed by hashed
+    keys (api_keys). RBAC: tenants are admin-only; campaigns, contacts,
+    contact-groups and suppressions require operator and are tenant-scoped.
+    Launch snapshots recipients with random path tokens; the public /t and /px
+    routes are authenticated by that unguessable token in the path (no API key,
+    per-IP rate limited) and record clicked/opened events. Every mutating
+    operator endpoint writes an audit_log entry.
 servers:
   - url: /api/v1
 security:
@@ -178,6 +180,103 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}/launch:
+    post:
+      operationId: launchCampaign
+      summary: Launch a draft campaign — snapshot recipients, go 'scheduled' (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: provide group_id and/or contact_ids; suppressed addresses are skipped
+              properties:
+                group_id:    { type: string, format: uuid }
+                contact_ids: { type: array, items: { type: string, format: uuid } }
+                landing_url: { type: string, description: click redirect target }
+            example: { group_id: "…", landing_url: "https://portal.example/awareness" }
+      responses:
+        "200":
+          description: Launched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  campaign_id: { type: string, format: uuid }
+                  status:      { type: string, enum: [scheduled] }
+                  recipients:  { type: integer }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Campaign is not in draft, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /campaigns/{id}/links:
+    get:
+      operationId: campaignLinks
+      summary: Per-recipient tracking link + pixel URLs (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        recipient_id: { type: string, format: uuid }
+                        contact_id:   { type: string, format: uuid }
+                        token:        { type: string }
+                        click_url:    { type: string }
+                        pixel_url:    { type: string }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /t/{token}:
+    get:
+      operationId: trackClick
+      summary: Public click tracker — records 'clicked', 302 to landing
+      description: >
+        Token-authenticated by the path segment (no API key). Unknown tokens
+        return a generic 404 page. Per-IP rate limited.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "302": { description: Redirect to the campaign landing URL }
+        "200": { description: Neutral page (no landing URL configured) }
+        "404": { description: Generic not-found page }
+        "429": { $ref: "#/components/responses/Problem" }
+
+  /px/{token}:
+    get:
+      operationId: trackOpen
+      summary: Public open tracker — records 'opened', returns 1x1 GIF
+      description: >
+        Token-authenticated by the path segment (no API key). Always returns the
+        pixel (even for unknown tokens) so it never reveals token validity.
+        Per-IP rate limited.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 1x1 transparent GIF (Cache-Control no-store)
+          content:
+            image/gif: { schema: { type: string, format: binary } }
+        "429": { $ref: "#/components/responses/Problem" }
 
   /contacts:
     post:
@@ -350,13 +449,14 @@ components:
     Campaign:
       type: object
       properties:
-        id:         { type: string, format: uuid }
-        tenant_id:  { type: string, format: uuid }
-        name:       { type: string }
-        status:     { $ref: "#/components/schemas/CampaignStatus" }
-        created_by: { type: string, format: uuid }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
+        id:          { type: string, format: uuid }
+        tenant_id:   { type: string, format: uuid }
+        name:        { type: string }
+        status:      { $ref: "#/components/schemas/CampaignStatus" }
+        landing_url: { type: string, nullable: true }
+        created_by:  { type: string, format: uuid }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
     ContactInput:
       type: object
       required: [email]

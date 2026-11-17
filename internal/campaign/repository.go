@@ -28,13 +28,14 @@ func ValidStatus(s string) bool {
 
 // Campaign is a campaign owned by a single tenant.
 type Campaign struct {
-	ID        uuid.UUID `json:"id"`
-	TenantID  uuid.UUID `json:"tenant_id"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	CreatedBy uuid.UUID `json:"created_by"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         uuid.UUID `json:"id"`
+	TenantID   uuid.UUID `json:"tenant_id"`
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	LandingURL *string   `json:"landing_url,omitempty"`
+	CreatedBy  uuid.UUID `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Repository provides campaign persistence. It is stateless; each method takes
@@ -44,11 +45,11 @@ type Repository struct{}
 // NewRepository returns a campaign repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const campaignColumns = `id, tenant_id, name, status, created_by, created_at, updated_at`
+const campaignColumns = `id, tenant_id, name, status, landing_url, created_by, created_at, updated_at`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var c Campaign
-	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Campaign{}, err
 	}
 	return c, nil
@@ -111,4 +112,34 @@ func (r *Repository) UpdateStatus(ctx context.Context, q db.Querier, tenantID, i
 		return ErrNotFound
 	}
 	return nil
+}
+
+// MarkScheduled transitions a campaign to 'scheduled' and sets landing_url when
+// provided (nil keeps the existing value). It is used by the launch flow.
+func (r *Repository) MarkScheduled(ctx context.Context, q db.Querier, tenantID, id uuid.UUID, landingURL *string) error {
+	const sql = `UPDATE campaigns
+	             SET status = 'scheduled', landing_url = COALESCE($3, landing_url), updated_at = now()
+	             WHERE tenant_id = $1 AND id = $2`
+	tag, err := q.Exec(ctx, sql, tenantID, id, landingURL)
+	if err != nil {
+		return fmt.Errorf("campaign: mark scheduled: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// LandingURLByID returns a campaign's landing URL by id (no tenant scope, for
+// the public tracking redirect which is already authorized by recipient token).
+func (r *Repository) LandingURLByID(ctx context.Context, q db.Querier, id uuid.UUID) (*string, error) {
+	var url *string
+	err := q.QueryRow(ctx, `SELECT landing_url FROM campaigns WHERE id = $1`, id).Scan(&url)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("campaign: landing url: %w", err)
+	}
+	return url, nil
 }

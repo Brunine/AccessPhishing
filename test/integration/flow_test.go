@@ -61,7 +61,7 @@ func TestCampaignEventFlow(t *testing.T) {
 		t.Fatalf("viewer key: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewServer(pool).Router())
+	srv := httptest.NewServer(api.NewServer(pool, "http://localhost:8080").Router())
 	defer srv.Close()
 
 	// --- auth + RBAC ---

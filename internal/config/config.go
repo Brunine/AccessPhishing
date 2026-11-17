@@ -11,6 +11,7 @@ type Config struct {
 	APIAddr     string
 	DatabaseURL string
 	RedisAddr   string
+	BaseURL     string
 	Env         string
 }
 
@@ -21,6 +22,7 @@ func Load() (Config, error) {
 		APIAddr:     getenv("API_ADDR", ":8080"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		RedisAddr:   getenv("REDIS_ADDR", "localhost:6379"),
+		BaseURL:     getenv("BASE_URL", "http://localhost:8080"),
 		Env:         getenv("APP_ENV", "dev"),
 	}
 	if c.DatabaseURL == "" {

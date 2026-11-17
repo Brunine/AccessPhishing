@@ -37,7 +37,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           api.NewServer(pool).Router(),
+		Handler:           api.NewServer(pool, cfg.BaseURL).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

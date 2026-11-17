@@ -31,7 +31,7 @@ func TestTargetManagement(t *testing.T) {
 		t.Fatalf("op key: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewServer(pool).Router())
+	srv := httptest.NewServer(api.NewServer(pool, "http://localhost:8080").Router())
 	defer srv.Close()
 
 	// group

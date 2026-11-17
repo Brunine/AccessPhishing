@@ -57,6 +57,27 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: campaign launch + recipient tracking — COMPLETE (M4 groundwork).
+  M2 + M1 complete. M3 NOT STARTED (per instruction).
+- Done (launch + tracking):
+  - Migration 0004: recipients (tenant/campaign/contact/group, unique random
+    URL-safe token, UNIQUE(campaign_id,contact_id)) + campaigns.landing_url.
+  - internal/recipient repo: 16-byte base64url token, Snapshot (skips existing
+    pairs), ListByCampaign, GetByToken (global — token is the credential).
+  - POST /api/v1/campaigns/{id}/launch (operator): validates draft, resolves
+    selected contacts (group_id and/or contact_ids), SKIPS suppressed, snapshots
+    recipients, campaign→scheduled, sets optional landing_url, audits — one tx.
+    Rejects zero recipients (400) and non-draft (409).
+  - GET /api/v1/campaigns/{id}/links (operator): per-recipient click/pixel URLs
+    from BASE_URL (path tokens, no query-string convention).
+  - Public, unauthenticated, per-IP rate-limited (60/min) group at root:
+    GET /t/{token} → append 'clicked' (ip/ua meta) → 302 landing / neutral page;
+    unknown token → generic 404. GET /px/{token} → append 'opened' → 1x1 GIF,
+    Cache-Control no-store; always returns the GIF (never leaks token validity).
+    State updated via events.Append; out-of-order signals are best-effort no-ops.
+  - config.BaseURL (BASE_URL env); api.NewServer(pool, baseURL).
+  - OpenAPI 0.4.0; test/integration/tracking_test.go (launch→links→/t→/px,
+    state assertions, bogus-token 404/no-event, relaunch 409).
 - Milestone: M2 (target management) — COMPLETE. M1 complete.
 - Done (M2 target management):
   - internal/contact, internal/group, internal/suppression repos (stateless,

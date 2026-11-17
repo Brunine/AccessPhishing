@@ -15,8 +15,10 @@ import (
 	"phishforge/internal/auth"
 	"phishforge/internal/campaign"
 	"phishforge/internal/contact"
+	"phishforge/internal/events"
 	"phishforge/internal/group"
 	"phishforge/internal/httpx"
+	"phishforge/internal/recipient"
 	"phishforge/internal/suppression"
 	"phishforge/internal/tenant"
 )
@@ -24,23 +26,30 @@ import (
 // Server holds dependencies shared by HTTP handlers.
 type Server struct {
 	pool         *pgxpool.Pool
+	baseURL      string
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
 	contacts     *contact.Repository
 	groups       *group.Repository
 	suppressions *suppression.Repository
+	recipients   *recipient.Repository
+	events       *events.Repository
 	keys         *apikey.Service
 }
 
-// NewServer constructs an API server over the given pool.
-func NewServer(pool *pgxpool.Pool) *Server {
+// NewServer constructs an API server over the given pool. baseURL is the public
+// origin used when generating tracking links (e.g. http://localhost:8080).
+func NewServer(pool *pgxpool.Pool, baseURL string) *Server {
 	return &Server{
 		pool:         pool,
+		baseURL:      baseURL,
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
 		contacts:     contact.NewRepository(),
 		groups:       group.NewRepository(),
 		suppressions: suppression.NewRepository(),
+		recipients:   recipient.NewRepository(),
+		events:       events.NewRepository(pool),
 		keys:         apikey.NewService(pool),
 	}
 }
@@ -73,6 +82,8 @@ func (s *Server) Router() http.Handler {
 				r.Get("/", s.listCampaigns)
 				r.Get("/{id}", s.getCampaign)
 				r.Patch("/{id}", s.patchCampaignStatus)
+				r.Post("/{id}/launch", s.launchCampaign)
+				r.Get("/{id}/links", s.campaignLinks)
 			})
 
 			// M2 target management (operator or above, tenant-scoped).
@@ -96,6 +107,14 @@ func (s *Server) Router() http.Handler {
 				r.Delete("/", s.deleteSuppression)
 			})
 		})
+	})
+
+	// Public tracking (token-authenticated via path; no auth middleware),
+	// behind a per-IP rate limit. Separate group mounted at root.
+	r.Group(func(r chi.Router) {
+		r.Use(newRateLimiter(60, time.Minute).middleware)
+		r.Get("/t/{token}", s.trackClick)
+		r.Get("/px/{token}", s.trackOpen)
 	})
 
 	return r
