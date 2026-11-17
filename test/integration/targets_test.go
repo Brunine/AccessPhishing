@@ -3,13 +3,11 @@ package integration
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"phishforge/internal/api"
 	"phishforge/internal/apikey"
 	"phishforge/internal/tenant"
 )
@@ -31,7 +29,7 @@ func TestTargetManagement(t *testing.T) {
 		t.Fatalf("op key: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewServer(pool, "http://localhost:8080").Router())
+	srv, _ := newAPI(t, pool)
 	defer srv.Close()
 
 	// group

@@ -39,7 +39,8 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 ## MODULES (build order)
 - [ ] M1 Orchestrator core (API, schema, RBAC, audit)
 - [x] M2 Target management (import, grouping, suppression, policies)
-- [ ] M3 Delivery engine (Postal SMTP, Graph/Gmail API injection, bounce ingest)
+- [~] M3 Delivery engine (SMTP send + templates + approval gate + Asynq worker
+      done; Graph/Gmail API injection + bounce ingest still TODO)
 - [ ] M4 Tracking (links, pixels, victim state machine webhooks)
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
 - [ ] M6 LLM service (Ollama client, prompt templates, approval workflow)
@@ -57,8 +58,31 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M3-lite delivery engine — COMPLETE. Launch/tracking, M2, M1 done.
+  M5 NOT STARTED (per instruction).
+- Done (M3-lite delivery):
+  - Migration 0005: sending_profiles (smtp_pass_encrypted = AES-256-GCM
+    envelope; tls_mode enum none|starttls|smtps) + campaigns.template_id /
+    sending_profile_id.
+  - internal/crypto: AES-256-GCM, per-tenant keys via HKDF-SHA256 from
+    ARTIFACT_ENC_KEY; versioned base64 envelope (v1||nonce||ct).
+  - Repos: internal/sendingprofile (pass never serialized), internal/template
+    (Go text/template bodies), internal/approval (draft→approved/rejected,
+    IsApproved gate).
+  - HTTP (operator): /templates CRUD, /sending-profiles CRUD-lite (encrypts
+    smtp_pass on create), /approvals (request + list); approve/reject require
+    admin. Launch now accepts template_id/sending_profile_id (tenant-validated).
+  - POST /campaigns/{id}/send (operator): requires status 'scheduled' + template
+    'approved' (else 403), enqueues Asynq "campaign:send"; audited. Pluggable
+    api.Enqueuer (internal/tasks.Client → Redis).
+  - internal/delivery: renders template per recipient (link/pixel from BASE_URL),
+    sends via SMTP (none/starttls/smtps, optional auth), concurrency =
+    SEND_CONCURRENCY, records sent/failed events. cmd/worker = Asynq consumer.
+  - api.NewServer now takes api.Deps{Pool, BaseURL, Cipher, Enqueuer}.
+  - OpenAPI 0.5.0; integration test (delivery_test.go) with go-smtp-mock:
+    approval gate 403 → admin approve → 202 enqueue, delivery core sends 2
+    mails + 2 'sent' events.
 - Milestone: campaign launch + recipient tracking — COMPLETE (M4 groundwork).
-  M2 + M1 complete. M3 NOT STARTED (per instruction).
 - Done (launch + tracking):
   - Migration 0004: recipients (tenant/campaign/contact/group, unique random
     URL-safe token, UNIQUE(campaign_id,contact_id)) + campaigns.landing_url.

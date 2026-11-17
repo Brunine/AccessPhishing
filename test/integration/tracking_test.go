@@ -3,12 +3,10 @@ package integration
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"phishforge/internal/api"
 	"phishforge/internal/apikey"
 	"phishforge/internal/tenant"
 )
@@ -31,7 +29,7 @@ func TestCampaignLaunchAndTracking(t *testing.T) {
 		t.Fatalf("op key: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewServer(pool, "http://base.local").Router())
+	srv, _ := newAPI(t, pool)
 	defer srv.Close()
 	get := func(path string) (int, string) { return do(t, srv.URL, http.MethodGet, path, "", nil) }
 

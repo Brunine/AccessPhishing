@@ -1,16 +1,18 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.4.0
+  version: 0.5.0
   description: >
-    M1 core + HTTP API layer + M2 target management + campaign launch and
-    recipient tracking. Auth is an X-API-Key dev identifier backed by hashed
-    keys (api_keys). RBAC: tenants are admin-only; campaigns, contacts,
-    contact-groups and suppressions require operator and are tenant-scoped.
-    Launch snapshots recipients with random path tokens; the public /t and /px
-    routes are authenticated by that unguessable token in the path (no API key,
-    per-IP rate limited) and record clicked/opened events. Every mutating
-    operator endpoint writes an audit_log entry.
+    M1 core + HTTP API + M2 target management + launch/tracking + M3 delivery.
+    Auth is an X-API-Key dev identifier (hashed). RBAC: tenants admin-only;
+    campaigns, contacts, groups, suppressions, templates, sending-profiles and
+    approval requests require operator (tenant-scoped); approval decisions
+    require admin. SMTP passwords are AES-256-GCM encrypted at rest. Sending is
+    gated: a campaign's template must have an 'approved' approval, and
+    POST /campaigns/{id}/send (status 'scheduled') enqueues an Asynq worker task
+    that renders the template per recipient and records sent/failed events.
+    Public /t and /px tracking routes are token-authenticated and rate limited.
+    Every mutating operator endpoint writes an audit_log entry.
 servers:
   - url: /api/v1
 security:
@@ -243,6 +245,117 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}/send:
+    post:
+      operationId: sendCampaign
+      summary: Enqueue delivery of a scheduled campaign (operator)
+      description: Requires status 'scheduled' and an 'approved' approval for the campaign's template.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { description: Queued, content: { application/json: { schema: { type: object, properties: { campaign_id: { type: string, format: uuid }, status: { type: string, enum: [queued] } } } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { description: Template not approved, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Campaign not in 'scheduled', content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /templates:
+    post:
+      operationId: createTemplate
+      summary: Create a message template (operator)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TemplateInput" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Template" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listTemplates
+      summary: List templates (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Template" } } } } } } }
+  /templates/{id}:
+    parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+    get:
+      operationId: getTemplate
+      summary: Get a template (operator)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Template" } } } }, "404": { $ref: "#/components/responses/Problem" } }
+    patch:
+      operationId: updateTemplate
+      summary: Update a template (operator)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TemplateInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Template" } } } }, "404": { $ref: "#/components/responses/Problem" } }
+    delete:
+      operationId: deleteTemplate
+      summary: Delete a template (operator)
+      responses: { "204": { description: Deleted }, "404": { $ref: "#/components/responses/Problem" } }
+
+  /sending-profiles:
+    post:
+      operationId: createSendingProfile
+      summary: Create an SMTP sending profile; smtp_pass is encrypted at rest (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, smtp_host, smtp_port, from_address]
+              properties:
+                name:         { type: string }
+                smtp_host:    { type: string }
+                smtp_port:    { type: integer }
+                smtp_user:    { type: string }
+                smtp_pass:    { type: string, description: write-only; AES-256-GCM encrypted, never returned }
+                from_address: { type: string }
+                from_name:    { type: string }
+                tls_mode:     { type: string, enum: [none, starttls, smtps], default: starttls }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SendingProfile" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { description: Encryption key not configured }
+    get:
+      operationId: listSendingProfiles
+      summary: List sending profiles (operator)
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/SendingProfile" } } } } } } } }
+  /sending-profiles/{id}:
+    parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+    get:
+      operationId: getSendingProfile
+      summary: Get a sending profile (operator)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SendingProfile" } } } }, "404": { $ref: "#/components/responses/Problem" } }
+    delete:
+      operationId: deleteSendingProfile
+      summary: Delete a sending profile (operator)
+      responses: { "204": { description: Deleted }, "404": { $ref: "#/components/responses/Problem" } }
+
+  /approvals:
+    post:
+      operationId: requestApproval
+      summary: Request approval for a subject, e.g. a template (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [subject_type, subject_id], properties: { subject_type: { type: string }, subject_id: { type: string, format: uuid } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Approval" } } } }, "400": { $ref: "#/components/responses/Problem" } }
+    get:
+      operationId: listApprovals
+      summary: List approvals (operator)
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Approval" } } } } } } }
+  /approvals/{id}/approve:
+    post:
+      operationId: approveApproval
+      summary: Approve a pending approval (admin)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: Approved, content: { application/json: { schema: { $ref: "#/components/schemas/Approval" } } } }, "403": { $ref: "#/components/responses/Problem" }, "404": { $ref: "#/components/responses/Problem" } }
+  /approvals/{id}/reject:
+    post:
+      operationId: rejectApproval
+      summary: Reject a pending approval (admin)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: Rejected, content: { application/json: { schema: { $ref: "#/components/schemas/Approval" } } } }, "403": { $ref: "#/components/responses/Problem" }, "404": { $ref: "#/components/responses/Problem" } }
 
   /t/{token}:
     get:
@@ -502,6 +615,54 @@ components:
         email:      { type: string }
         reason:     { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+    TemplateInput:
+      type: object
+      required: [name, body]
+      properties:
+        kind:    { type: string, enum: [email, sms, landing, phishlet, script, voice], default: email }
+        name:    { type: string }
+        subject: { type: string }
+        body:    { type: string, description: Go text/template, e.g. "Hi {{.first_name}} {{.link}}" }
+    Template:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        kind:       { type: string }
+        name:       { type: string }
+        subject:    { type: string, nullable: true }
+        body:       { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SendingProfile:
+      type: object
+      description: smtp_pass is never returned.
+      properties:
+        id:           { type: string, format: uuid }
+        tenant_id:    { type: string, format: uuid }
+        name:         { type: string }
+        smtp_host:    { type: string }
+        smtp_port:    { type: integer }
+        smtp_user:    { type: string, nullable: true }
+        from_address: { type: string }
+        from_name:    { type: string, nullable: true }
+        tls_mode:     { type: string, enum: [none, starttls, smtps] }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
+    Approval:
+      type: object
+      properties:
+        id:           { type: string, format: uuid }
+        tenant_id:    { type: string, format: uuid }
+        subject_type: { type: string }
+        subject_id:   { type: string, format: uuid }
+        status:       { type: string, enum: [draft, approved, rejected, sent] }
+        requested_by: { type: string, format: uuid, nullable: true }
+        decided_by:   { type: string, format: uuid, nullable: true }
+        decided_at:   { type: string, format: date-time, nullable: true }
+        notes:        { type: string, nullable: true }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
     Problem:
       type: object
       required: [type, title, status]

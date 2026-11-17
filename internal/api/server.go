@@ -9,24 +9,44 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"phishforge/internal/apikey"
+	"phishforge/internal/approval"
 	"phishforge/internal/auth"
 	"phishforge/internal/campaign"
 	"phishforge/internal/contact"
+	"phishforge/internal/crypto"
 	"phishforge/internal/events"
 	"phishforge/internal/group"
 	"phishforge/internal/httpx"
 	"phishforge/internal/recipient"
+	"phishforge/internal/sendingprofile"
 	"phishforge/internal/suppression"
+	tmpl "phishforge/internal/template"
 	"phishforge/internal/tenant"
 )
+
+// Enqueuer schedules background tasks (implemented by internal/tasks.Client).
+type Enqueuer interface {
+	EnqueueCampaignSend(ctx context.Context, tenantID, campaignID uuid.UUID) error
+}
+
+// Deps are the dependencies required to build a Server.
+type Deps struct {
+	Pool     *pgxpool.Pool
+	BaseURL  string
+	Cipher   *crypto.Cipher
+	Enqueuer Enqueuer
+}
 
 // Server holds dependencies shared by HTTP handlers.
 type Server struct {
 	pool         *pgxpool.Pool
 	baseURL      string
+	cipher       *crypto.Cipher
+	enqueuer     Enqueuer
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
 	contacts     *contact.Repository
@@ -34,23 +54,30 @@ type Server struct {
 	suppressions *suppression.Repository
 	recipients   *recipient.Repository
 	events       *events.Repository
+	templates    *tmpl.Repository
+	profiles     *sendingprofile.Repository
+	approvals    *approval.Repository
 	keys         *apikey.Service
 }
 
-// NewServer constructs an API server over the given pool. baseURL is the public
-// origin used when generating tracking links (e.g. http://localhost:8080).
-func NewServer(pool *pgxpool.Pool, baseURL string) *Server {
+// NewServer constructs an API server from its dependencies.
+func NewServer(d Deps) *Server {
 	return &Server{
-		pool:         pool,
-		baseURL:      baseURL,
+		pool:         d.Pool,
+		baseURL:      d.BaseURL,
+		cipher:       d.Cipher,
+		enqueuer:     d.Enqueuer,
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
 		contacts:     contact.NewRepository(),
 		groups:       group.NewRepository(),
 		suppressions: suppression.NewRepository(),
 		recipients:   recipient.NewRepository(),
-		events:       events.NewRepository(pool),
-		keys:         apikey.NewService(pool),
+		events:       events.NewRepository(d.Pool),
+		templates:    tmpl.NewRepository(),
+		profiles:     sendingprofile.NewRepository(),
+		approvals:    approval.NewRepository(),
+		keys:         apikey.NewService(d.Pool),
 	}
 }
 
@@ -84,6 +111,29 @@ func (s *Server) Router() http.Handler {
 				r.Patch("/{id}", s.patchCampaignStatus)
 				r.Post("/{id}/launch", s.launchCampaign)
 				r.Get("/{id}/links", s.campaignLinks)
+				r.Post("/{id}/send", s.sendCampaign)
+			})
+
+			// M3 delivery: templates, sending profiles, approvals (operator).
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/templates", func(r chi.Router) {
+				r.Post("/", s.createTemplate)
+				r.Get("/", s.listTemplates)
+				r.Get("/{id}", s.getTemplate)
+				r.Patch("/{id}", s.updateTemplate)
+				r.Delete("/{id}", s.deleteTemplate)
+			})
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/sending-profiles", func(r chi.Router) {
+				r.Post("/", s.createSendingProfile)
+				r.Get("/", s.listSendingProfiles)
+				r.Get("/{id}", s.getSendingProfile)
+				r.Delete("/{id}", s.deleteSendingProfile)
+			})
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/approvals", func(r chi.Router) {
+				r.Post("/", s.requestApproval)
+				r.Get("/", s.listApprovals)
+				// Decisions require admin.
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/approve", s.approveApproval)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/reject", s.rejectApproval)
 			})
 
 			// M2 target management (operator or above, tenant-scoped).

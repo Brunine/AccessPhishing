@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,9 +30,43 @@ import (
 
 	"phishforge/internal/api"
 	"phishforge/internal/apikey"
+	"phishforge/internal/crypto"
 	"phishforge/internal/events"
 	"phishforge/internal/tenant"
 )
+
+// fakeEnqueuer records campaign-send enqueues instead of touching Redis.
+type fakeEnqueuer struct {
+	mu    sync.Mutex
+	sends []uuid.UUID
+}
+
+func (f *fakeEnqueuer) EnqueueCampaignSend(_ context.Context, _ uuid.UUID, campaignID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sends = append(f.sends, campaignID)
+	return nil
+}
+
+func (f *fakeEnqueuer) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sends)
+}
+
+// newAPI builds an httptest server with a real cipher and a fake enqueuer.
+func newAPI(t *testing.T, pool *pgxpool.Pool) (*httptest.Server, *fakeEnqueuer) {
+	t.Helper()
+	cip, err := crypto.New(strings.Repeat("ab", 32)) // 64 hex chars = 32 bytes
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	enq := &fakeEnqueuer{}
+	srv := httptest.NewServer(api.NewServer(api.Deps{
+		Pool: pool, BaseURL: "http://base.local", Cipher: cip, Enqueuer: enq,
+	}).Router())
+	return srv, enq
+}
 
 func TestCampaignEventFlow(t *testing.T) {
 	pool := setupDB(t)
@@ -61,7 +96,7 @@ func TestCampaignEventFlow(t *testing.T) {
 		t.Fatalf("viewer key: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewServer(pool, "http://localhost:8080").Router())
+	srv, _ := newAPI(t, pool)
 	defer srv.Close()
 
 	// --- auth + RBAC ---

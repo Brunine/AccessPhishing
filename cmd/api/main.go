@@ -13,7 +13,9 @@ import (
 
 	"phishforge/internal/api"
 	"phishforge/internal/config"
+	"phishforge/internal/crypto"
 	"phishforge/internal/db"
+	"phishforge/internal/tasks"
 )
 
 func main() {
@@ -35,9 +37,28 @@ func main() {
 	}
 	defer pool.Close()
 
+	var cipher *crypto.Cipher
+	if cfg.ArtifactEncKey != "" {
+		cipher, err = crypto.New(cfg.ArtifactEncKey)
+		if err != nil {
+			logger.Error("invalid ARTIFACT_ENC_KEY", "err", err)
+			os.Exit(1)
+		}
+	} else {
+		logger.Warn("ARTIFACT_ENC_KEY not set; sending-profile endpoints disabled")
+	}
+
+	enqueuer := tasks.NewClient(cfg.RedisAddr)
+	defer enqueuer.Close()
+
 	srv := &http.Server{
-		Addr:              cfg.APIAddr,
-		Handler:           api.NewServer(pool, cfg.BaseURL).Router(),
+		Addr: cfg.APIAddr,
+		Handler: api.NewServer(api.Deps{
+			Pool:     pool,
+			BaseURL:  cfg.BaseURL,
+			Cipher:   cipher,
+			Enqueuer: enqueuer,
+		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

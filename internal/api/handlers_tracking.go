@@ -29,9 +29,11 @@ var transparentGIF, _ = base64.StdEncoding.DecodeString(
 
 func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		GroupID    *uuid.UUID  `json:"group_id"`
-		ContactIDs []uuid.UUID `json:"contact_ids"`
-		LandingURL *string     `json:"landing_url"`
+		GroupID          *uuid.UUID  `json:"group_id"`
+		ContactIDs       []uuid.UUID `json:"contact_ids"`
+		LandingURL       *string     `json:"landing_url"`
+		TemplateID       *uuid.UUID  `json:"template_id"`
+		SendingProfileID *uuid.UUID  `json:"sending_profile_id"`
 	}
 	if !decode(w, r, &b) {
 		return
@@ -44,6 +46,20 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
 		return
+	}
+
+	// Validate referenced template / sending profile belong to the tenant.
+	if b.TemplateID != nil {
+		if _, err := s.templates.GetByID(r.Context(), s.pool, p.TenantID, *b.TemplateID); err != nil {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "template_id not found in tenant")
+			return
+		}
+	}
+	if b.SendingProfileID != nil {
+		if _, err := s.profiles.GetByID(r.Context(), s.pool, p.TenantID, *b.SendingProfileID); err != nil {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "sending_profile_id not found in tenant")
+			return
+		}
 	}
 
 	tx, err := s.pool.Begin(r.Context())
@@ -84,7 +100,7 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "snapshot recipients")
 		return
 	}
-	if err := s.campaigns.MarkScheduled(r.Context(), tx, p.TenantID, id, b.LandingURL); err != nil {
+	if err := s.campaigns.MarkScheduled(r.Context(), tx, p.TenantID, id, b.LandingURL, b.TemplateID, b.SendingProfileID); err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "schedule campaign")
 		return
 	}

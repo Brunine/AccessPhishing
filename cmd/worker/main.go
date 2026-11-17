@@ -1,19 +1,19 @@
-// Command worker runs background jobs for PhishForge.
-//
-// M1 scope: the worker loads config, holds the database pool, and shuts down
-// cleanly on signal. The Asynq/Redis consumer is wired in M3+.
+// Command worker runs the Asynq background consumer for PhishForge.
+// It processes "campaign:send" tasks by delivering the campaign over SMTP.
 package main
 
 import (
 	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
+
+	"github.com/hibiken/asynq"
 
 	"phishforge/internal/config"
+	"phishforge/internal/crypto"
 	"phishforge/internal/db"
+	"phishforge/internal/delivery"
+	"phishforge/internal/tasks"
 )
 
 func main() {
@@ -25,9 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+	ctx := context.Background()
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("database connect failed", "err", err)
@@ -35,18 +33,41 @@ func main() {
 	}
 	defer pool.Close()
 
-	logger.Info("worker started", "redis", cfg.RedisAddr, "env", cfg.Env)
+	if cfg.ArtifactEncKey == "" {
+		logger.Error("ARTIFACT_ENC_KEY is required for the worker")
+		os.Exit(1)
+	}
+	cipher, err := crypto.New(cfg.ArtifactEncKey)
+	if err != nil {
+		logger.Error("invalid ARTIFACT_ENC_KEY", "err", err)
+		os.Exit(1)
+	}
 
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	sender := delivery.NewSender(pool, cipher, cfg.BaseURL, cfg.SendConcurrency)
 
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Info("worker shutdown complete")
-			return
-		case <-ticker.C:
-			logger.Debug("worker heartbeat")
+	mux := asynq.NewServeMux()
+	mux.HandleFunc(tasks.TypeCampaignSend, func(ctx context.Context, t *asynq.Task) error {
+		p, err := tasks.ParseCampaignSend(t)
+		if err != nil {
+			return err
 		}
+		res, err := sender.SendCampaign(ctx, p.TenantID, p.CampaignID)
+		if err != nil {
+			logger.Error("campaign send failed", "campaign", p.CampaignID, "err", err)
+			return err
+		}
+		logger.Info("campaign sent", "campaign", p.CampaignID, "sent", res.Sent, "failed", res.Failed)
+		return nil
+	})
+
+	srv := asynq.NewServer(
+		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
+		asynq.Config{Concurrency: cfg.SendConcurrency},
+	)
+
+	logger.Info("worker starting", "redis", cfg.RedisAddr, "concurrency", cfg.SendConcurrency)
+	if err := srv.Run(mux); err != nil {
+		logger.Error("worker stopped", "err", err)
+		os.Exit(1)
 	}
 }

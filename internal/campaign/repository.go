@@ -28,14 +28,16 @@ func ValidStatus(s string) bool {
 
 // Campaign is a campaign owned by a single tenant.
 type Campaign struct {
-	ID         uuid.UUID `json:"id"`
-	TenantID   uuid.UUID `json:"tenant_id"`
-	Name       string    `json:"name"`
-	Status     string    `json:"status"`
-	LandingURL *string   `json:"landing_url,omitempty"`
-	CreatedBy  uuid.UUID `json:"created_by"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID               uuid.UUID  `json:"id"`
+	TenantID         uuid.UUID  `json:"tenant_id"`
+	Name             string     `json:"name"`
+	Status           string     `json:"status"`
+	LandingURL       *string    `json:"landing_url,omitempty"`
+	TemplateID       *uuid.UUID `json:"template_id,omitempty"`
+	SendingProfileID *uuid.UUID `json:"sending_profile_id,omitempty"`
+	CreatedBy        uuid.UUID  `json:"created_by"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // Repository provides campaign persistence. It is stateless; each method takes
@@ -45,12 +47,24 @@ type Repository struct{}
 // NewRepository returns a campaign repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const campaignColumns = `id, tenant_id, name, status, landing_url, created_by, created_at, updated_at`
+const campaignColumns = `id, tenant_id, name, status, landing_url, template_id, sending_profile_id, created_by, created_at, updated_at`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
-	var c Campaign
-	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	var (
+		c   Campaign
+		tpl uuid.NullUUID
+		sp  uuid.NullUUID
+	)
+	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Campaign{}, err
+	}
+	if tpl.Valid {
+		id := tpl.UUID
+		c.TemplateID = &id
+	}
+	if sp.Valid {
+		id := sp.UUID
+		c.SendingProfileID = &id
 	}
 	return c, nil
 }
@@ -114,13 +128,18 @@ func (r *Repository) UpdateStatus(ctx context.Context, q db.Querier, tenantID, i
 	return nil
 }
 
-// MarkScheduled transitions a campaign to 'scheduled' and sets landing_url when
-// provided (nil keeps the existing value). It is used by the launch flow.
-func (r *Repository) MarkScheduled(ctx context.Context, q db.Querier, tenantID, id uuid.UUID, landingURL *string) error {
+// MarkScheduled transitions a campaign to 'scheduled' and sets the send config
+// (landing_url, template, sending profile). Nil values keep the existing value.
+// It is used by the launch flow.
+func (r *Repository) MarkScheduled(ctx context.Context, q db.Querier, tenantID, id uuid.UUID, landingURL *string, templateID, profileID *uuid.UUID) error {
 	const sql = `UPDATE campaigns
-	             SET status = 'scheduled', landing_url = COALESCE($3, landing_url), updated_at = now()
+	             SET status = 'scheduled',
+	                 landing_url = COALESCE($3, landing_url),
+	                 template_id = COALESCE($4, template_id),
+	                 sending_profile_id = COALESCE($5, sending_profile_id),
+	                 updated_at = now()
 	             WHERE tenant_id = $1 AND id = $2`
-	tag, err := q.Exec(ctx, sql, tenantID, id, landingURL)
+	tag, err := q.Exec(ctx, sql, tenantID, id, landingURL, templateID, profileID)
 	if err != nil {
 		return fmt.Errorf("campaign: mark scheduled: %w", err)
 	}
