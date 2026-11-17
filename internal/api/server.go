@@ -21,6 +21,7 @@ import (
 	"phishforge/internal/events"
 	"phishforge/internal/group"
 	"phishforge/internal/httpx"
+	"phishforge/internal/llmdraft"
 	"phishforge/internal/recipient"
 	"phishforge/internal/sendingprofile"
 	"phishforge/internal/suppression"
@@ -33,12 +34,22 @@ type Enqueuer interface {
 	EnqueueCampaignSend(ctx context.Context, tenantID, campaignID uuid.UUID) error
 }
 
+// LLMClient drafts message content. Implemented by internal/llm.Client; a nil
+// value means the feature is disabled (generate returns 503). Output is treated
+// as data (stored as a draft), never executed.
+type LLMClient interface {
+	Generate(ctx context.Context, prompt string) (string, error)
+	Ping(ctx context.Context) error
+	Model() string
+}
+
 // Deps are the dependencies required to build a Server.
 type Deps struct {
 	Pool     *pgxpool.Pool
 	BaseURL  string
 	Cipher   *crypto.Cipher
 	Enqueuer Enqueuer
+	LLM      LLMClient
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -47,6 +58,8 @@ type Server struct {
 	baseURL      string
 	cipher       *crypto.Cipher
 	enqueuer     Enqueuer
+	llm          LLMClient
+	drafts       *llmdraft.Repository
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
 	contacts     *contact.Repository
@@ -67,6 +80,8 @@ func NewServer(d Deps) *Server {
 		baseURL:      d.BaseURL,
 		cipher:       d.Cipher,
 		enqueuer:     d.Enqueuer,
+		llm:          d.LLM,
+		drafts:       llmdraft.NewRepository(),
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
 		contacts:     contact.NewRepository(),
@@ -117,6 +132,17 @@ func (s *Server) Router() http.Handler {
 
 			// Dashboard activity feed: recent audit entries + events (operator).
 			r.With(auth.RequireRole(auth.RoleOperator)).Get("/activity", s.activity)
+
+			// M6 LLM: generate drafts, promote approved drafts to templates
+			// (operator). Draft approval uses the existing /approvals flow with
+			// subject_type 'llm_draft'; there is no new decision path here.
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/llm", func(r chi.Router) {
+				r.Post("/generate", s.llmGenerate)
+				r.Get("/drafts", s.listDrafts)
+				r.Get("/drafts/{id}", s.getDraft)
+				r.Post("/drafts/{id}/promote", s.promoteDraft)
+				r.Post("/drafts/{id}/discard", s.discardDraft)
+			})
 
 			// M3 delivery: templates, sending profiles, approvals (operator).
 			r.With(auth.RequireRole(auth.RoleOperator)).Route("/templates", func(r chi.Router) {
@@ -204,9 +230,21 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		status, dbStatus, code = "degraded", "down", http.StatusServiceUnavailable
 	}
 
+	// LLM is an optional sub-check: an unreachable host does not fail health,
+	// so the API keeps serving even when the model host is down.
+	llmStatus := "disabled"
+	if s.llm != nil {
+		if err := s.llm.Ping(ctx); err != nil {
+			llmStatus = "down"
+		} else {
+			llmStatus = "ok"
+		}
+	}
+
 	httpx.JSON(w, code, map[string]any{
 		"status": status,
 		"db":     dbStatus,
+		"llm":    llmStatus,
 		"time":   time.Now().UTC().Format(time.RFC3339),
 	})
 }

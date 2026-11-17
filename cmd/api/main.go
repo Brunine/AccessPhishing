@@ -15,6 +15,7 @@ import (
 	"phishforge/internal/config"
 	"phishforge/internal/crypto"
 	"phishforge/internal/db"
+	"phishforge/internal/llm"
 	"phishforge/internal/tasks"
 )
 
@@ -51,6 +52,16 @@ func main() {
 	enqueuer := tasks.NewClient(cfg.RedisAddr)
 	defer enqueuer.Close()
 
+	// Build the LLM client only when configured; keep the Deps field an untyped
+	// nil interface when disabled so handlers see s.llm == nil (no typed-nil).
+	var llmClient api.LLMClient
+	if c := llm.New(cfg.LLMBaseURL, cfg.LLMModel, cfg.LLMTimeout); c != nil {
+		llmClient = c
+		logger.Info("llm enabled", "base", cfg.LLMBaseURL, "model", cfg.LLMModel)
+	} else {
+		logger.Warn("LLM_BASE_URL not set; /llm/generate disabled")
+	}
+
 	srv := &http.Server{
 		Addr: cfg.APIAddr,
 		Handler: api.NewServer(api.Deps{
@@ -58,6 +69,7 @@ func main() {
 			BaseURL:  cfg.BaseURL,
 			Cipher:   cipher,
 			Enqueuer: enqueuer,
+			LLM:      llmClient,
 		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

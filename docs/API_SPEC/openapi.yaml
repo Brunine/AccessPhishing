@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.5.0
+  version: 0.6.0
   description: >
     M1 core + HTTP API + M2 target management + launch/tracking + M3 delivery.
     Auth is an X-API-Key dev identifier (hashed). RBAC: tenants admin-only;
@@ -16,6 +16,13 @@ info:
     Version kept at 0.5.0: the M8-lite dashboard added two read-only operator
     endpoints — GET /campaigns/{id}/targets and GET /activity — without changing
     any existing contract.
+    0.6.0 adds M6 LLM integration: /llm/generate drafts message content via an
+    Ollama host (LLM_BASE_URL; model output is stored as data, never executed),
+    and /llm/drafts/{id}/promote converts an approved draft into a template.
+    Draft approval reuses the /approvals flow (subject_type 'llm_draft'); there
+    is no new decision path. /llm/generate returns 503 when the LLM is unset or
+    the host is unreachable, and health gains an "llm" sub-check that never fails
+    overall health.
 servers:
   - url: /api/v1
 security:
@@ -342,6 +349,73 @@ paths:
                         created_at:  { type: string, format: date-time }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+
+  /llm/generate:
+    post:
+      operationId: llmGenerate
+      summary: Generate a message draft via the LLM (operator)
+      description: >
+        Builds a server-owned prompt from the structured brief (fields are data,
+        never system instructions), calls the Ollama host, and stores the result
+        as an llm_drafts row (status 'draft'). Model output is data, never
+        executed or auto-sent. Returns 503 when the LLM is unconfigured or the
+        host is unreachable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic]
+              properties:
+                kind:     { type: string, enum: [email, sms, landing], default: email }
+                topic:    { type: string }
+                tone:     { type: string }
+                notes:    { type: string }
+                audience: { type: string }
+                name:     { type: string, description: optional draft/template name }
+      responses:
+        "201": { description: Draft created, content: { application/json: { schema: { $ref: "#/components/schemas/LLMDraft" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "503": { description: LLM unconfigured or unreachable, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /llm/drafts:
+    get:
+      operationId: listDrafts
+      summary: List LLM drafts (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/LLMDraft" } } } } } } }
+
+  /llm/drafts/{id}:
+    parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+    get:
+      operationId: getDraft
+      summary: Get an LLM draft (operator)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/LLMDraft" } } } }, "404": { $ref: "#/components/responses/Problem" } }
+
+  /llm/drafts/{id}/promote:
+    post:
+      operationId: promoteDraft
+      summary: Promote an approved draft into a template (operator)
+      description: >
+        Requires the draft to be approved via /approvals (subject_type
+        'llm_draft'); 403 otherwise. Creates a templates row from the draft and
+        marks the draft 'approved'.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "201": { description: Template created, content: { application/json: { schema: { $ref: "#/components/schemas/Template" } } } }
+        "403": { description: Draft not approved, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Draft discarded or template name conflict, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /llm/drafts/{id}/discard:
+    post:
+      operationId: discardDraft
+      summary: Discard an LLM draft (operator)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: Discarded, content: { application/json: { schema: { $ref: "#/components/schemas/LLMDraft" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /templates:
     post:
@@ -717,6 +791,22 @@ components:
         body:       { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    LLMDraft:
+      type: object
+      description: An LLM-generated content record awaiting review. Promoted to a Template only after approval.
+      properties:
+        id:             { type: string, format: uuid }
+        tenant_id:      { type: string, format: uuid }
+        created_by:     { type: string, format: uuid, nullable: true }
+        kind:           { type: string, enum: [email, sms, landing] }
+        name:           { type: string }
+        subject:        { type: string, nullable: true }
+        body:           { type: string }
+        model:          { type: string }
+        prompt_summary: { type: string }
+        status:         { type: string, enum: [draft, approved, rejected, discarded] }
+        created_at:     { type: string, format: date-time }
+        updated_at:     { type: string, format: date-time }
     SendingProfile:
       type: object
       description: smtp_pass is never returned.

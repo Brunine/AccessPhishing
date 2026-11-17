@@ -5,17 +5,21 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 // Config holds process-wide settings resolved at startup.
 type Config struct {
-	APIAddr        string
-	DatabaseURL    string
-	RedisAddr      string
-	BaseURL        string
-	ArtifactEncKey string
+	APIAddr         string
+	DatabaseURL     string
+	RedisAddr       string
+	BaseURL         string
+	ArtifactEncKey  string
 	SendConcurrency int
-	Env            string
+	LLMBaseURL      string
+	LLMModel        string
+	LLMTimeout      time.Duration
+	Env             string
 }
 
 // Load reads configuration from environment variables, applying defaults.
@@ -28,6 +32,9 @@ func Load() (Config, error) {
 		BaseURL:         getenv("BASE_URL", "http://localhost:8080"),
 		ArtifactEncKey:  os.Getenv("ARTIFACT_ENC_KEY"),
 		SendConcurrency: getenvInt("SEND_CONCURRENCY", 10),
+		LLMBaseURL:      os.Getenv("LLM_BASE_URL"),
+		LLMModel:        getenv("LLM_MODEL", "llama3.1:8b"),
+		LLMTimeout:      getenvDuration("LLM_TIMEOUT", 120*time.Second),
 		Env:             getenv("APP_ENV", "dev"),
 	}
 	if c.DatabaseURL == "" {
@@ -41,6 +48,25 @@ func getenvInt(key string, def int) int {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
+	}
+	return def
+}
+
+// getenvDuration parses a duration from key. A bare integer is read as seconds
+// (e.g. "120"); otherwise a Go duration string is accepted (e.g. "90s", "2m").
+func getenvDuration(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		if n > 0 {
+			return time.Duration(n) * time.Second
+		}
+		return def
+	}
+	if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		return d
 	}
 	return def
 }

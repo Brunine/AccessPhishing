@@ -43,7 +43,8 @@ concise. Tables for tradeoffs, code blocks for everything executable.
       done; Graph/Gmail API injection + bounce ingest still TODO)
 - [ ] M4 Tracking (links, pixels, victim state machine webhooks)
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
-- [ ] M6 LLM service (Ollama client, prompt templates, approval workflow)
+- [~] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline
+      done; a configurable prompt-template library still TODO)
 - [ ] M7 OSINT (subfinder/amass, dnstwist, registrar APIs, reputation checks)
 - [~] M8 Dashboard (web/ operator console done; timelines, KPIs, executive PDF,
       tenant portals still TODO)
@@ -59,6 +60,41 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M6-lite LLM integration — COMPLETE. M5 NOT STARTED (per instruction).
+- Done (M6 LLM):
+  - internal/llm: minimal Ollama client. New(baseURL, model, timeout) returns
+    nil when baseURL empty (feature disabled). Generate(ctx, prompt) → POST
+    /api/generate (stream:false), context+http timeout (LLM_TIMEOUT), response
+    capped at 1 MiB; Ping(ctx) → GET /api/tags. All connection/non-2xx errors
+    returned wrapped — the API boots and serves even if the host is down.
+  - Migration 0006: llm_drafts (kind enum email|sms|landing, status enum
+    draft|approved|rejected|discarded, model, prompt_summary, subject/body) +
+    enums; updated_at trigger. internal/llmdraft repo (Create/GetByID/List/
+    SetStatus), tenant-scoped.
+  - HTTP (operator) /llm: POST /generate builds a SERVER-OWNED prompt from the
+    structured brief (kind/topic/tone/notes/audience) — user fields are fenced
+    as data (newlines stripped), never system instructions — calls Generate,
+    parses "Subject:" first line for email, stores a draft (status draft, model
+    recorded), returns it. GET /drafts, GET /drafts/{id}. POST /drafts/{id}/
+    promote converts an APPROVED draft → templates row (approval via existing
+    /approvals, subject_type 'llm_draft'; 403 if not approved; 409 on name
+    clash/discarded) and marks the draft approved. POST /drafts/{id}/discard.
+    Model output is data, never executed/auto-sent. All mutations audited
+    (llm.generate / llm.promote / llm.discard).
+  - config: LLM_BASE_URL (empty = disabled → /generate 503), LLM_MODEL
+    (default llama3.1:8b), LLM_TIMEOUT (seconds or Go duration, default 120s);
+    added to .env.example. Unreachable host → /generate 503. Health gains an
+    "llm" sub-check (ok|down|disabled) that never fails overall health.
+  - api.Deps gained LLM api.LLMClient (Generate/Ping/Model); cmd/api builds it
+    only when configured (untyped-nil interface when disabled). OpenAPI 0.6.0
+    with /llm endpoints + LLMDraft schema.
+  - Tests: test/integration/llm_test.go — fake Ollama (httptest): generate
+    stores a draft (subject parsed, placeholders present, model recorded),
+    promote gate 403 → approve → 201 template (row asserted) + draft 'approved',
+    discard, audit counts; TestLLMUnreachable: closed port → generate 503,
+    health 200 with llm 'down', campaigns still 200.
+  - Verification: go build/vet/test clean (integration 6.9s); dev DB migrate
+    pending (apply 0006 before live use).
 - Milestone: M8-lite operator dashboard (web/) — COMPLETE (first version).
   M5 NOT STARTED (per instruction).
 - Done (M8-lite dashboard):
