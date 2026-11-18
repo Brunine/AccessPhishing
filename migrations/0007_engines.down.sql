@@ -1,0 +1,4 @@
+BEGIN;
+DROP TABLE IF EXISTS engines;
+DROP TYPE IF EXISTS engine_status;
+COMMIT;
