@@ -23,6 +23,7 @@ type Config struct {
 	EngineBinaryPath  string
 	EngineMaxRestarts int
 	EngineBackoff     time.Duration
+	EngineDataDir string
 }
 
 // Load reads configuration from environment variables, applying defaults.
@@ -42,6 +43,7 @@ func Load() (Config, error) {
 		EngineBinaryPath:  os.Getenv("ENGINE_BINARY_PATH"),
 		EngineMaxRestarts: getenvInt("ENGINE_MAX_RESTARTS", 3),
 		EngineBackoff:     getenvDuration("ENGINE_BACKOFF", 1*time.Second),
+		EngineDataDir: getenv("ENGINE_DATA_DIR", "data/engines"),
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: DATABASE_URL is required")

@@ -35,6 +35,7 @@ type Campaign struct {
 	LandingURL       *string    `json:"landing_url,omitempty"`
 	TemplateID       *uuid.UUID `json:"template_id,omitempty"`
 	SendingProfileID *uuid.UUID `json:"sending_profile_id,omitempty"`
+	EngineID         *uuid.UUID `json:"engine_id,omitempty"`
 	CreatedBy        uuid.UUID  `json:"created_by"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
@@ -47,15 +48,16 @@ type Repository struct{}
 // NewRepository returns a campaign repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const campaignColumns = `id, tenant_id, name, status, landing_url, template_id, sending_profile_id, created_by, created_at, updated_at`
+const campaignColumns = `id, tenant_id, name, status, landing_url, template_id, sending_profile_id, engine_id, created_by, created_at, updated_at`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var (
 		c   Campaign
 		tpl uuid.NullUUID
 		sp  uuid.NullUUID
+		eng uuid.NullUUID
 	)
-	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &eng, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Campaign{}, err
 	}
 	if tpl.Valid {
@@ -65,6 +67,10 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 	if sp.Valid {
 		id := sp.UUID
 		c.SendingProfileID = &id
+	}
+	if eng.Valid {
+		id := eng.UUID
+		c.EngineID = &id
 	}
 	return c, nil
 }
@@ -142,6 +148,21 @@ func (r *Repository) MarkScheduled(ctx context.Context, q db.Querier, tenantID, 
 	tag, err := q.Exec(ctx, sql, tenantID, id, landingURL, templateID, profileID)
 	if err != nil {
 		return fmt.Errorf("campaign: mark scheduled: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetEngine binds (engineID non-nil) or unbinds (nil) an engine to a
+// campaign. Returns ErrNotFound if the campaign does not exist.
+func (r *Repository) SetEngine(ctx context.Context, q db.Querier, tenantID, campaignID uuid.UUID, engineID *uuid.UUID) error {
+	const sql = `UPDATE campaigns SET engine_id = $3, updated_at = now()
+	             WHERE tenant_id = $1 AND id = $2`
+	tag, err := q.Exec(ctx, sql, tenantID, campaignID, engineID)
+	if err != nil {
+		return fmt.Errorf("campaign: set engine: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound

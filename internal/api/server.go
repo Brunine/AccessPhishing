@@ -135,6 +135,8 @@ func (s *Server) Router() http.Handler {
 				r.Get("/{id}/links", s.campaignLinks)
 				r.Get("/{id}/targets", s.campaignTargets)
 				r.Post("/{id}/send", s.sendCampaign)
+				r.Post("/{id}/engine", s.bindEngine)
+				r.Get("/{id}/engine", s.getEngineForCampaign)
 			})
 
 			// Dashboard activity feed: recent audit entries + events (operator).
