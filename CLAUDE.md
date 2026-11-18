@@ -45,7 +45,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
 - [~] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline
       done; a configurable prompt-template library still TODO)
-- [ ] M7 OSINT (subfinder/amass, dnstwist, registrar APIs, reputation checks)
+- [~] M7 OSINT (services/osint-py FastAPI: subdomains (subfinder/crt.sh),
+      dnstwist-style generation, RDAP availability, VT reputation — done;
+      amass + Go orchestrator wiring still TODO)
 - [~] M8 Dashboard (web/ operator console done; timelines, KPIs, executive PDF,
       tenant portals still TODO)
 - [ ] M9 Secondary vectors (SMS, QR, BitB injects, Asterisk vishing + local TTS)
@@ -60,6 +62,31 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M7 OSINT microservice (services/osint-py) — COMPLETE (standalone).
+- Done (M7 OSINT):
+  - services/osint-py: FastAPI (Python 3.12+), hatchling pyproject, Dockerfile,
+    compose profile "osint" (published only on 127.0.0.1:8099). Isolated from
+    the Go core — no Go code touched except the compose profile.
+  - App: create_app factory + lifespan-shared httpx.AsyncClient; immutable
+    Settings from env; stdlib JSON logging; thread-safe TTL cache (only mutable
+    state); X-OSINT-TOKEN dependency (enforced only when OSINT_TOKEN set).
+  - Endpoints (operator-less for now; token-gated when configured):
+    POST /recon/subdomains (subfinder via shutil.which, else crt.sh JSON with
+    retries; normalized/deduped/in-scope); POST /domains/generate (native
+    dnstwist-style fuzzers — addition/omission/repetition/hyphenation/
+    replacement(qwerty)/bitsquatting/tld-swap; leftmost-label fuzzing;
+    deterministic order; capped at OSINT_MAX_CANDIDATES with truncated flag);
+    POST /domains/availability (RDAP per domain, semaphore 10; 404=available,
+    200=registered, else null); POST /domains/reputation (VT v3 when VT_API_KEY
+    set, 1h TTL cache; else per-domain "no_key"). /health reports auth + vt.
+  - Env: OSINT_TOKEN, OSINT_MAX_CANDIDATES, VT_API_KEY, VT_CACHE_TTL,
+    RDAP_TIMEOUT, OSINT_HTTP_TIMEOUT/RETRIES, *_BASE overrides. docs/OSINT.md
+    covers endpoints, env, run/lock steps, and the future Go-integration shape.
+  - Tests: pytest + respx (no network) — 18 passing: deterministic generation
+    (golden expectations for omission/hyphenation/replacement/tld-swap, cap/
+    truncation, dedup, multi-label), crt.sh normalization + failure→empty,
+    RDAP inference + connection error, VT no_key/parsed/cached(once)/error,
+    and token auth (401/open/health). Verified in a py3.14 venv.
 - Milestone: M6-lite LLM integration — COMPLETE. M5 NOT STARTED (per instruction).
 - Done (M6 LLM):
   - internal/llm: minimal Ollama client. New(baseURL, model, timeout) returns

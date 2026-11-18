@@ -28,5 +28,19 @@ services:
       postgres:
         condition: service_healthy
 
+  osint:
+    build:
+      context: ../services/osint-py
+    profiles: ["osint"]
+    environment:
+      OSINT_TOKEN: ${OSINT_TOKEN:-}
+      OSINT_MAX_CANDIDATES: ${OSINT_MAX_CANDIDATES:-500}
+      VT_API_KEY: ${VT_API_KEY:-}
+      RDAP_TIMEOUT: ${RDAP_TIMEOUT:-10}
+    # Published only on the host loopback; the service itself binds 0.0.0.0
+    # inside the container.
+    ports:
+      - "127.0.0.1:8099:8099"
+
 volumes:
   pgdata:
