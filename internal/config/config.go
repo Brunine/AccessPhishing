@@ -20,6 +20,9 @@ type Config struct {
 	LLMModel        string
 	LLMTimeout      time.Duration
 	Env             string
+	EngineBinaryPath  string
+	EngineMaxRestarts int
+	EngineBackoff     time.Duration
 }
 
 // Load reads configuration from environment variables, applying defaults.
@@ -36,6 +39,9 @@ func Load() (Config, error) {
 		LLMModel:        getenv("LLM_MODEL", "llama3.1:8b"),
 		LLMTimeout:      getenvDuration("LLM_TIMEOUT", 120*time.Second),
 		Env:             getenv("APP_ENV", "dev"),
+		EngineBinaryPath:  os.Getenv("ENGINE_BINARY_PATH"),
+		EngineMaxRestarts: getenvInt("ENGINE_MAX_RESTARTS", 3),
+		EngineBackoff:     getenvDuration("ENGINE_BACKOFF", 1*time.Second),
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: DATABASE_URL is required")

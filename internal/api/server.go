@@ -17,6 +17,8 @@ import (
 	"phishforge/internal/auth"
 	"phishforge/internal/campaign"
 	"phishforge/internal/contact"
+	"phishforge/internal/engine"
+	"phishforge/internal/enginerepo"
 	"phishforge/internal/crypto"
 	"phishforge/internal/events"
 	"phishforge/internal/group"
@@ -50,6 +52,7 @@ type Deps struct {
 	Cipher   *crypto.Cipher
 	Enqueuer Enqueuer
 	LLM      LLMClient
+	Engines  *engine.Manager
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -71,6 +74,8 @@ type Server struct {
 	profiles     *sendingprofile.Repository
 	approvals    *approval.Repository
 	keys         *apikey.Service
+	engines    *engine.Manager
+	engineRepo *enginerepo.Repository
 }
 
 // NewServer constructs an API server from its dependencies.
@@ -93,6 +98,8 @@ func NewServer(d Deps) *Server {
 		profiles:     sendingprofile.NewRepository(),
 		approvals:    approval.NewRepository(),
 		keys:         apikey.NewService(d.Pool),
+		engines:    d.Engines,
+		engineRepo: enginerepo.NewRepository(),
 	}
 }
 
@@ -185,6 +192,17 @@ func (s *Server) Router() http.Handler {
 				r.Post("/", s.addSuppression)
 				r.Get("/", s.listSuppressions)
 				r.Delete("/", s.deleteSuppression)
+			})
+
+			// M5 part 1: managed engine lifecycle (operator).
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/engines", func(r chi.Router) {
+				r.Post("/", s.createEngine)
+				r.Get("/", s.listEngines)
+				r.Get("/{id}", s.getEngine)
+				r.Post("/{id}/start", s.startEngine)
+				r.Post("/{id}/stop", s.stopEngine)
+				r.Get("/{id}/logs", s.engineLogs)
+				r.Delete("/{id}", s.deleteEngine)
 			})
 		})
 	})

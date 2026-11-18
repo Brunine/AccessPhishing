@@ -15,6 +15,7 @@ import (
 	"phishforge/internal/config"
 	"phishforge/internal/crypto"
 	"phishforge/internal/db"
+	"phishforge/internal/engine"
 	"phishforge/internal/llm"
 	"phishforge/internal/tasks"
 )
@@ -62,6 +63,18 @@ func main() {
 		logger.Warn("LLM_BASE_URL not set; /llm/generate disabled")
 	}
 
+	// Engine supervisor is wired only when a binary path is configured; a nil
+	// manager leaves engine start/stop endpoints returning 503 while CRUD
+	// keeps working.
+	var engManager *engine.Manager
+	if cfg.EngineBinaryPath != "" {
+		engManager = engine.New(cfg.EngineBinaryPath, cfg.EngineMaxRestarts, cfg.EngineBackoff)
+		logger.Info("engine manager enabled", "binary", cfg.EngineBinaryPath,
+			"max_restarts", cfg.EngineMaxRestarts, "backoff", cfg.EngineBackoff)
+	} else {
+		logger.Warn("ENGINE_BINARY_PATH not set; engine start/stop disabled")
+	}
+
 	srv := &http.Server{
 		Addr: cfg.APIAddr,
 		Handler: api.NewServer(api.Deps{
@@ -70,8 +83,11 @@ func main() {
 			Cipher:   cipher,
 			Enqueuer: enqueuer,
 			LLM:      llmClient,
+			Engines: engManager,
 		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
+		
+		
 	}
 
 	go func() {
