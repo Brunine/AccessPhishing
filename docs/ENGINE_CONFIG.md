@@ -20,6 +20,18 @@ restart:               # optional section
   max_attempts: 3      # 0..20, default 3 (0 = no restarts)
   backoff_ms: 1000     # 10..60000, default 1000
 stop_timeout_ms: 5000  # 100..30000, default 5000 (graceful-stop deadline)
+
+# ---- Part 2: network sections (all optional at the schema level; the
+# ---- engine kind decides which are required at start time) ----
+listener:              # where the engine binds for inbound traffic
+  listen_addr: "0.0.0.0:443"
+  tls:                 # optional; omit for plain HTTP
+    cert_file: /etc/engines/cert.pem
+    key_file: /etc/engines/key.pem
+upstream:              # the backend the engine forwards to
+  scheme: https        # http | https
+  host: login.example.com
+  port: 443            # 1..65535
 ```
 
 ## Validation rules

@@ -1,15 +1,19 @@
 // Package engineconfig parses and validates the YAML configuration for a
-// managed engine process. Part 1 is structural only: launch args, env,
-// restart policy, and stop timeout. Unknown fields are rejected so that
-// configs written against future (part 2+) sections fail fast here.
+// managed engine process. Part 1: launch args, env, restart policy, stop
+// timeout. Part 2: network endpoint sections (listener + upstream).
+// Unknown fields are rejected so configs written against future sections
+// fail fast here.
 package engineconfig
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
+	"strconv"
 	"strings"
+	"io"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,17 +22,20 @@ import (
 const MaxConfigBytes = 64 << 10 // 64 KiB
 
 var (
-	kindRe  = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+	kindRe   = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 	envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	hostRe   = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 )
 
 // Limits for list/map sizes and string lengths.
 const (
-	MaxArgs        = 64
-	MaxArgLen      = 4096
-	MaxEnvEntries  = 32
-	MaxEnvValLen   = 4096
-	MaxKindLen     = 64
+	MaxArgs       = 64
+	MaxArgLen     = 4096
+	MaxEnvEntries = 32
+	MaxEnvValLen  = 4096
+	MaxKindLen    = 64
+	MaxPathLen    = 4096
+	MaxHostLen    = 253
 )
 
 // Restart is the automatic-restart policy for a crashed process.
@@ -37,13 +44,34 @@ type Restart struct {
 	BackoffMs   int `yaml:"backoff_ms"`
 }
 
-// Config is the validated, launch-oriented engine configuration.
+// TLS material for the listener. Both paths must be present together.
+type TLS struct {
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+// Listener is the inbound endpoint the engine binds.
+type Listener struct {
+	ListenAddr string `yaml:"listen_addr"`
+	TLS        *TLS   `yaml:"tls"`
+}
+
+// Upstream is the backend the engine forwards traffic to.
+type Upstream struct {
+	Scheme string `yaml:"scheme"`
+	Host   string `yaml:"host"`
+	Port   int    `yaml:"port"`
+}
+
+// Config is the validated engine configuration.
 type Config struct {
 	Kind          string            `yaml:"kind"`
 	Args          []string          `yaml:"args"`
 	Env           map[string]string `yaml:"env"`
 	Restart       Restart           `yaml:"restart"`
 	StopTimeoutMs int               `yaml:"stop_timeout_ms"`
+	Listener      *Listener         `yaml:"listener"`
+	Upstream      *Upstream         `yaml:"upstream"`
 }
 
 // Defaults applied after parsing.
@@ -67,10 +95,6 @@ func (e *ValidationError) addf(format string, a ...any) {
 	e.Errors = append(e.Errors, fmt.Sprintf(format, a...))
 }
 
-func (e *ValidationError) add(msg string) {
-	e.Errors = append(e.Errors, msg)
-}
-
 // Parse validates raw YAML into a Config. It rejects oversized documents,
 // unknown fields, and invalid values; it applies defaults for omitted
 // optional fields.
@@ -84,10 +108,14 @@ func Parse(raw []byte) (Config, error) {
 
 	var cfg Config
 	if err := dec.Decode(&cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return Config{}, errors.New("engineconfig: empty or missing document")
+		}
 		return Config{}, fmt.Errorf("engineconfig: parse: %w", err)
 	}
 	// Reject trailing documents / empty input.
-	if cfg.Kind == "" && len(cfg.Args) == 0 && len(cfg.Env) == 0 {
+	if cfg.Kind == "" && len(cfg.Args) == 0 && len(cfg.Env) == 0 &&
+		cfg.Listener == nil && cfg.Upstream == nil {
 		return Config{}, errors.New("engineconfig: empty or missing document")
 	}
 
@@ -113,10 +141,8 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	var ve ValidationError
 
-	if c.Kind == "" {
-		ve.add("kind: empty or missing")
-	} else if !kindRe.MatchString(c.Kind) {
-		ve.add(fmt.Sprintf("kind %q must match [a-z0-9_-]{1,64}", c.Kind))
+	if !kindRe.MatchString(c.Kind) {
+		ve.addf("kind %q must match [a-z0-9_-]{1,64}", c.Kind)
 	}
 	if len(c.Args) > MaxArgs {
 		ve.addf("args has %d entries, max %d", len(c.Args), MaxArgs)
@@ -150,14 +176,75 @@ func (c *Config) validate() error {
 		ve.addf("stop_timeout_ms %d out of range 0..30000", c.StopTimeoutMs)
 	}
 
+	if c.Listener != nil {
+		validateListener(&ve, c.Listener)
+	}
+	if c.Upstream != nil {
+		validateUpstream(&ve, c.Upstream)
+	}
+
 	if len(ve.Errors) > 0 {
 		return &ve
 	}
 	return nil
 }
 
+func validateListener(ve *ValidationError, l *Listener) {
+	if l.ListenAddr == "" {
+		ve.addf("listener.listen_addr is required when listener is present")
+		return
+	}
+	host, portStr, err := net.SplitHostPort(l.ListenAddr)
+	if err != nil {
+		ve.addf("listener.listen_addr %q is not host:port", l.ListenAddr)
+		return
+	}
+	port, perr := strconv.Atoi(portStr)
+	if perr != nil || port < 1 || port > 65535 {
+		ve.addf("listener.listen_addr port %q out of range 1..65535", portStr)
+	}
+	if host != "" && host != "0.0.0.0" && host != "::" {
+		if net.ParseIP(host) == nil && !hostRe.MatchString(host) {
+			ve.addf("listener.listen_addr host %q is not a valid IP or hostname", host)
+		}
+	}
+	if l.TLS != nil {
+		hasCert, hasKey := l.TLS.CertFile != "", l.TLS.KeyFile != ""
+		if hasCert != hasKey {
+			ve.addf("listener.tls: cert_file and key_file must be provided together")
+		}
+		for _, p := range []string{l.TLS.CertFile, l.TLS.KeyFile} {
+			if len(p) > MaxPathLen {
+				ve.addf("listener.tls path is %d chars, max %d", len(p), MaxPathLen)
+			}
+		}
+	}
+}
+
+func validateUpstream(ve *ValidationError, u *Upstream) {
+	switch u.Scheme {
+	case "http", "https":
+	default:
+		ve.addf("upstream.scheme %q must be http or https", u.Scheme)
+	}
+	if u.Host == "" {
+		ve.addf("upstream.host is required when upstream is present")
+		return
+	}
+	if len(u.Host) > MaxHostLen {
+		ve.addf("upstream.host is %d chars, max %d", len(u.Host), MaxHostLen)
+		return
+	}
+	// IP literal (v4, or v6 with brackets stripped) or RFC 1123 hostname.
+	h := strings.Trim(u.Host, "[]")
+	if net.ParseIP(h) == nil && !hostRe.MatchString(h) {
+		ve.addf("upstream.host %q is not a valid hostname or IP", u.Host)
+	}
+	if u.Port < 1 || u.Port > 65535 {
+		ve.addf("upstream.port %d out of range 1..65535", u.Port)
+	}
+}
+
 // Validate re-checks an already-parsed Config (used before each Start).
 func (c *Config) Validate() error { return c.validate() }
 
-// StopTimeout returns the graceful-stop deadline.
-func (c *Config) StopTimeout() (ms int) { return c.StopTimeoutMs }
