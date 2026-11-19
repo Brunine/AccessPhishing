@@ -3,6 +3,7 @@ import { useSession } from "./auth";
 import { KeyGate, Layout } from "./components/Layout";
 import { Spinner } from "./components/ui";
 import Tenants from "./pages/Tenants";
+import Overview from "./pages/Overview";
 import Contacts from "./pages/Contacts";
 import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
@@ -24,7 +25,8 @@ export default function App() {
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<Navigate to="/campaigns" replace />} />
+        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/overview" element={<Overview />} />
         <Route path="/campaigns" element={<Campaigns />} />
         <Route path="/campaigns/:id" element={<CampaignDetail />} />
         <Route path="/contacts" element={<Contacts />} />

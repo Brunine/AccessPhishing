@@ -155,6 +155,58 @@ export interface Activity {
   events: EventRecord[];
 }
 
+export interface ReportTotals {
+  recipients: number;
+  pending: number;
+  sent: number;
+  delivered: number;
+  opened: number;
+  clicked: number;
+  creds: number;
+  session_hijacked: number;
+  post_exploitation: number;
+  bounced: number;
+  failed: number;
+}
+
+export interface ReportRates {
+  delivered: number;
+  opened: number;
+  clicked: number;
+  creds: number;
+  session_hijacked: number;
+}
+
+export interface TimelineBucket {
+  bucket: string;
+  counts: Record<string, number>;
+}
+
+export interface CampaignReport {
+  campaign_id: string;
+  name: string;
+  status: string;
+  bucket: "hour" | "day";
+  totals: ReportTotals;
+  rates: ReportRates;
+  timeline: TimelineBucket[];
+}
+
+export interface CampaignSummary {
+  campaign_id: string;
+  name: string;
+  status: string;
+  totals: ReportTotals;
+  rates: ReportRates;
+}
+
+export interface TenantSummary {
+  tenant_id: string;
+  totals: ReportTotals;
+  rates: ReportRates;
+  campaigns: CampaignSummary[];
+}
+
 export interface ListResponse<T> {
   items: T[];
   limit?: number;

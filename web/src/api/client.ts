@@ -7,6 +7,7 @@ import type {
   Approval,
   Campaign,
   CampaignLink,
+  CampaignReport,
   CampaignTarget,
   Contact,
   Group,
@@ -15,6 +16,7 @@ import type {
   SendingProfile,
   Template,
   Tenant,
+  TenantSummary,
 } from "./types";
 
 const KEY_STORAGE = "phishforge.apiKey";
@@ -117,6 +119,27 @@ function items<T>(r: ListResponse<T>): T[] {
   return r.items ?? [];
 }
 
+// downloadCsv fetches a CSV export (with the API key) and triggers a browser
+// download. It never renders the payload — the file holds only states and
+// timestamps (the API guarantees no secret material).
+async function downloadCsv(path: string): Promise<void> {
+  const res = await fetch(BASE + path, { headers: { "X-API-Key": getKey() } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, res.statusText, text);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const name = path.split("/").slice(-2).join("-").replace("?", "_") || "export.csv";
+  a.download = name.endsWith(".csv") ? name : name + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // Probe the principal's role without a dedicated whoami endpoint: admin can
 // list tenants; operator can list campaigns; otherwise viewer. A 401 means the
 // key itself is invalid.
@@ -143,6 +166,8 @@ export const api = {
     list: () => request<ListResponse<Tenant>>("GET", "/tenants").then(items),
     create: (b: { name: string; slug: string }) =>
       request<Tenant>("POST", "/tenants", b),
+    summary: (id: string) =>
+      request<TenantSummary>("GET", `/tenants/${id}/summary`),
   },
 
   groups: {
@@ -199,6 +224,9 @@ export const api = {
       ).then(items),
     send: (id: string) =>
       request<{ status: string }>("POST", `/campaigns/${id}/send`),
+    report: (id: string, bucket: "hour" | "day" = "day") =>
+      request<CampaignReport>("GET", `/campaigns/${id}/report?bucket=${bucket}`),
+    reportCsv: (id: string) => downloadCsv(`/campaigns/${id}/report.csv`),
   },
 
   templates: {

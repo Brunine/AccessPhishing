@@ -4,6 +4,7 @@ import { useSession } from "../auth";
 import { ErrorBanner } from "./ui";
 
 const NAV = [
+  { to: "/overview", label: "Overview" },
   { to: "/campaigns", label: "Campaigns" },
   { to: "/contacts", label: "Contacts" },
   { to: "/templates", label: "Templates" },

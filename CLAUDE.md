@@ -48,9 +48,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
       validation, dry-run render, and generate-by-template)
 - [~] M7 OSINT (services/osint-py FastAPI + Go orchestrator client/endpoints
       (internal/osintclient, /api/v1/osint/*) done; amass still TODO)
-- [~] M8 Dashboard (web/ operator console + reporting/KPI aggregation
-      (internal/report, campaign+tenant endpoints, CSV) done; executive PDF,
-      tenant portals, dashboard charts still TODO)
+- [~] M8 Dashboard (web/ operator console + reporting/KPI aggregation +
+      dashboard charts (funnel, timeline, tenant overview) done; executive PDF
+      + tenant portals still TODO)
 - [ ] M9 Secondary vectors (SMS, QR, BitB injects, Asterisk vishing + local TTS)
 - [ ] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
 
@@ -63,6 +63,27 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M8 build-out part 2 — dashboard charts over the report endpoints.
+- Done (M8 charts, web/):
+  - Hand-rolled SVG/div charts (web/src/components/charts.tsx — no new deps):
+    FunnelChart (proportional sent→delivered→opened→clicked→creds→
+    session_hijacked bars with counts + %), TimelineChart (stacked SVG bars per
+    hour/day bucket, colored by event type, legend), RateBar.
+  - Campaign detail (web/src/pages/CampaignDetail.tsx): Report section driven by
+    GET /campaigns/{id}/report?bucket=hour|day — funnel + timeline, bucket
+    toggle, opt-in 30s poll, manual refresh, and a "Download CSV" button
+    (fetches /report.csv with the key via a blob download; renders nothing —
+    states + timestamps only, no secret material).
+  - New Overview page (web/src/pages/Overview.tsx, nav + default route): tenant
+    portfolio from GET /tenants/{id}/summary (tenant id derived from the
+    operator's campaigns list) — aggregate RateBars + per-campaign rate table
+    (recipients, delivered/opened/clicked/creds %), rows link to campaign detail.
+  - api client: campaigns.report/reportCsv, tenants.summary; report types added.
+  - Verification: `npm run build` clean (tsc --noEmit + vite build, 49 modules).
+    The routes the JS calls (/report, /report.csv, /tenants/{id}/summary) are
+    shape-asserted by test/integration/report_test.go (TestCampaignReport). No
+    Go code changed; go build clean. No web test harness exists (per spec, a
+    shape smoke suffices).
 - Milestone: M7 build-out — OSINT service wired into the Go orchestrator.
 - Done (M7 orchestrator wiring):
   - internal/osintclient: Go client for services/osint-py. New(baseURL, apiKey,

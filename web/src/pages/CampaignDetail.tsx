@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Approval, Campaign } from "../api/types";
 import { useAsync } from "../hooks";
+import { FunnelChart, TimelineChart } from "../components/charts";
 import {
   Badge,
   Empty,
@@ -135,6 +136,92 @@ function LaunchForm({
   );
 }
 
+function ReportSection({ campaignId }: { campaignId: string }) {
+  const [bucket, setBucket] = useState<"hour" | "day">("day");
+  const [poll, setPoll] = useState(false);
+  const report = useAsync(() => api.campaigns.report(campaignId, bucket), [campaignId, bucket]);
+  const [csvErr, setCsvErr] = useState<unknown>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  // Bounded 30s poll (opt-in). report.reload is stable (useAsync).
+  useEffect(() => {
+    if (!poll) return;
+    const t = setInterval(() => report.reload(), 30000);
+    return () => clearInterval(t);
+  }, [poll, report.reload]);
+
+  async function exportCsv() {
+    setCsvErr(null);
+    setDownloading(true);
+    try {
+      await api.campaigns.reportCsv(campaignId);
+    } catch (e) {
+      setCsvErr(e);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className="card space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-200">Report</h2>
+        <div className="flex items-center gap-2 text-xs">
+          <div className="flex overflow-hidden rounded border border-ink-600">
+            {(["hour", "day"] as const).map((b) => (
+              <button
+                key={b}
+                className={`px-2 py-1 ${bucket === b ? "bg-ink-700 text-slate-100" : "text-slate-400 hover:text-slate-200"}`}
+                onClick={() => setBucket(b)}
+              >
+                {b}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1 text-slate-400">
+            <input type="checkbox" checked={poll} onChange={(e) => setPoll(e.target.checked)} />
+            auto 30s
+          </label>
+          <button className="text-slate-400 hover:text-slate-200" onClick={() => report.reload()}>
+            Refresh
+          </button>
+          <button className="btn-ghost px-2 py-1" onClick={exportCsv} disabled={downloading}>
+            {downloading ? "…" : "Download CSV"}
+          </button>
+        </div>
+      </div>
+
+      <ErrorBanner error={report.error} />
+      <ErrorBanner error={csvErr} />
+
+      {report.loading && !report.data ? (
+        <Spinner />
+      ) : report.data ? (
+        <div className="space-y-6">
+          <div>
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+              Funnel ({report.data.totals.recipients} recipients)
+            </h3>
+            <FunnelChart totals={report.data.totals} />
+          </div>
+          <div>
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+              Event timeline (by {report.data.bucket})
+            </h3>
+            <TimelineChart timeline={report.data.timeline} />
+          </div>
+        </div>
+      ) : (
+        <Empty>No report data.</Empty>
+      )}
+      <p className="text-xs text-slate-600">
+        The CSV export contains per-recipient state and stage timestamps only —
+        no captured credentials or session material.
+      </p>
+    </div>
+  );
+}
+
 function LaunchedView({ campaign }: { campaign: Campaign }) {
   const targets = useAsync(() => api.campaigns.targets(campaign.id), [campaign.id]);
   const links = useAsync(() => api.campaigns.links(campaign.id), [campaign.id]);
@@ -185,6 +272,8 @@ function LaunchedView({ campaign }: { campaign: Campaign }) {
 
   return (
     <div className="space-y-6">
+      <ReportSection campaignId={campaign.id} />
+
       <div className="card">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
           <span className="text-slate-400">
