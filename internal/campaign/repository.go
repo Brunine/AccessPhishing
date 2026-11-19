@@ -183,3 +183,29 @@ func (r *Repository) LandingURLByID(ctx context.Context, q db.Querier, id uuid.U
 	}
 	return url, nil
 }
+
+
+// LandingRedirectByID returns a campaign's landing URL and engine binding by
+// id (no tenant scope; the public tracking redirect is authorized by the
+// recipient token). The engine binding decides whether the victim token is
+// passed through to the landing page as _pft.
+func (r *Repository) LandingRedirectByID(ctx context.Context, q db.Querier, id uuid.UUID) (*string, *uuid.UUID, error) {
+	var (
+		url *string
+		eng uuid.NullUUID
+	)
+	err := q.QueryRow(ctx,
+		`SELECT landing_url, engine_id FROM campaigns WHERE id = $1`, id).Scan(&url, &eng)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("campaign: landing redirect: %w", err)
+	}
+	var engineID *uuid.UUID
+	if eng.Valid {
+		id2 := eng.UUID
+		engineID = &id2
+	}
+	return url, engineID, nil
+}

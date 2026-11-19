@@ -154,3 +154,53 @@ func (r *Repository) Delete(ctx context.Context, q db.Querier, tenantID, id uuid
 	}
 	return nil
 }
+
+// SetCallbackHash stores the SHA-256 hex hash of the engine's per-run
+// callback token (minted at start, cleared at stop).
+func (r *Repository) SetCallbackHash(ctx context.Context, q db.Querier, tenantID, id uuid.UUID, hash string) error {
+	const sql = `UPDATE engines SET callback_token_hash = $3, updated_at = now()
+	             WHERE tenant_id = $1 AND id = $2`
+	ct, err := q.Exec(ctx, sql, tenantID, id, hash)
+	if err != nil {
+		return fmt.Errorf("enginerepo: set callback hash: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ClearCallbackHash removes the callback token hash (used on stop).
+func (r *Repository) ClearCallbackHash(ctx context.Context, q db.Querier, tenantID, id uuid.UUID) error {
+	const sql = `UPDATE engines SET callback_token_hash = NULL, updated_at = now()
+	             WHERE tenant_id = $1 AND id = $2`
+	ct, err := q.Exec(ctx, sql, tenantID, id)
+	if err != nil {
+		return fmt.Errorf("enginerepo: clear callback hash: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CallbackHashByID returns the stored callback token hash for an engine.
+// Deliberately NOT tenant-scoped: the bearer token itself is the
+// authenticator for the public ingest endpoint; the engine id in the URL is
+// only a lookup key. Returns ErrNotFound when no engine exists or no token
+// is configured (engine not running).
+func (r *Repository) CallbackHashByID(ctx context.Context, q db.Querier, id uuid.UUID) (string, error) {
+	var hash *string
+	err := q.QueryRow(ctx,
+		`SELECT callback_token_hash FROM engines WHERE id = $1`, id).Scan(&hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("enginerepo: callback hash: %w", err)
+	}
+	if hash == nil || *hash == "" {
+		return "", ErrNotFound
+	}
+	return *hash, nil
+}

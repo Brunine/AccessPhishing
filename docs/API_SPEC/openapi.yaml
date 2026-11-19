@@ -1,28 +1,9 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.7.0
+  version: 0.8.0
   description: >
-    M1 core + HTTP API + M2 target management + launch/tracking + M3 delivery.
-    Auth is an X-API-Key dev identifier (hashed). RBAC: tenants admin-only;
-    campaigns, contacts, groups, suppressions, templates, sending-profiles and
-    approval requests require operator (tenant-scoped); approval decisions
-    require admin. SMTP passwords are AES-256-GCM encrypted at rest. Sending is
-    gated: a campaign's template must have an 'approved' approval, and
-    POST /campaigns/{id}/send (status 'scheduled') enqueues an Asynq worker task
-    that renders the template per recipient and records sent/failed events.
-    Public /t and /px tracking routes are token-authenticated and rate limited.
-    Every mutating operator endpoint writes an audit_log entry.
-    Version kept at 0.5.0: the M8-lite dashboard added two read-only operator
-    endpoints — GET /campaigns/{id}/targets and GET /activity — without changing
-    any existing contract.
-    0.6.0 adds M6 LLM integration: /llm/generate drafts message content via an
-    Ollama host (LLM_BASE_URL; model output is stored as data, never executed),
-    and /llm/drafts/{id}/promote converts an approved draft into a template.
-    Draft approval reuses the /approvals flow (subject_type 'llm_draft'); there
-    is no new decision path. /llm/generate returns 503 when the LLM is unset or
-    the host is unreachable, and health gains an "llm" sub-check that never fails
-    overall health.
+    0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
   - url: /api/v1
 security:
@@ -747,6 +728,38 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { stdout: { type: string }, stderr: { type: string } } } } } }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/engines/{id}/events:
+    post:
+      operationId: ingestEngineEvents
+      summary: Engine capture-only event ingest (per-run bearer token)
+      security: []          # authenticated by per-run bearer, not X-API-Key
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, token]
+              properties:
+                type: { type: string, enum: [creds, session_hijacked] }
+                token: { type: string, description: victim _pft token }
+                occurred_at: { type: string, format: date-time }
+                payload:
+                  type: object
+                  description: >
+                    Capture-only: the orchestrator persists only field/cookie
+                    NAMES; captured values are discarded at ingest.
+      responses:
+        "202": { description: accepted }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+
 
 components:
   securitySchemes:

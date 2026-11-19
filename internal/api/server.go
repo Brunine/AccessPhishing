@@ -207,6 +207,14 @@ func (s *Server) Router() http.Handler {
 				r.Delete("/{id}", s.deleteEngine)
 			})
 		})
+
+		// Public engine ingest (per-run bearer token, capture-only). Separate
+		// group from tracking: engines post in batches, so a larger budget.
+		r.Group(func(r chi.Router) {
+			r.Use(newRateLimiter(600, time.Minute).middleware)
+			r.Post("/api/v1/engines/{id}/events", s.engineEvents)
+		})
+		
 	})
 
 	// Public tracking (token-authenticated via path; no auth middleware),
