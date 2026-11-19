@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.8.0
+  version: 0.8.1
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -88,6 +88,24 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /tenants/{id}/summary:
+    get:
+      operationId: tenantSummary
+      summary: Tenant portfolio KPI rollup (operator, own tenant only)
+      description: >
+        Read-only (M8). Aggregates funnel counts and rates across all of the
+        caller's campaigns. 403 if {id} is not the caller's own tenant.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TenantSummary" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /campaigns:
     post:
@@ -280,6 +298,43 @@ paths:
                         token:         { type: string }
                         state:         { type: string, enum: [pending, sent, delivered, opened, clicked, creds, session_hijacked, post_exploitation, bounced, failed] }
                         last_event_at: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}/report:
+    get:
+      operationId: campaignReport
+      summary: Campaign KPI report + timeline (operator)
+      description: >
+        Read-only (M8). Funnel counts/rates over recipients + campaign_targets
+        and an event timeline bucketed by hour or day. No captured secret
+        material is returned.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: bucket, in: query, required: false, schema: { type: string, enum: [hour, day], default: day } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CampaignReport" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}/report.csv:
+    get:
+      operationId: campaignReportCSV
+      summary: Flat per-recipient drilldown export (operator)
+      description: >
+        Read-only (M8). One row per recipient with current state and first-seen
+        stage timestamps (sent/delivered/opened/clicked/creds/session_hijacked).
+        No captured credentials or session material are included.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: CSV export
+          content:
+            text/csv:
+              schema: { type: string }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
@@ -768,6 +823,7 @@ paths:
                     occurred_at: { type: string, format: date-time }
                     payload: { type: object }
       responses:
+        "200": {accepted, results[]}
         "202": { description: accepted }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
@@ -819,6 +875,65 @@ components:
         created_by:  { type: string, format: uuid }
         created_at:  { type: string, format: date-time }
         updated_at:  { type: string, format: date-time }
+    ReportTotals:
+      type: object
+      description: >
+        Funnel counts over recipients. Each linear field counts recipients that
+        reached that stage or beyond (the successful path); bounced/failed are
+        reported separately and are not part of the funnel.
+      properties:
+        recipients:        { type: integer }
+        pending:           { type: integer }
+        sent:              { type: integer }
+        delivered:         { type: integer }
+        opened:            { type: integer }
+        clicked:           { type: integer }
+        creds:             { type: integer }
+        session_hijacked:  { type: integer }
+        post_exploitation: { type: integer }
+        bounced:           { type: integer }
+        failed:            { type: integer }
+    ReportRates:
+      type: object
+      description: Funnel fractions of total recipients (0..1).
+      properties:
+        delivered:        { type: number, format: float }
+        opened:           { type: number, format: float }
+        clicked:          { type: number, format: float }
+        creds:            { type: number, format: float }
+        session_hijacked: { type: number, format: float }
+    CampaignReport:
+      type: object
+      properties:
+        campaign_id: { type: string, format: uuid }
+        name:        { type: string }
+        status:      { type: string }
+        bucket:      { type: string, enum: [hour, day] }
+        totals:      { $ref: "#/components/schemas/ReportTotals" }
+        rates:       { $ref: "#/components/schemas/ReportRates" }
+        timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              bucket: { type: string, format: date-time }
+              counts: { type: object, additionalProperties: { type: integer } }
+    TenantSummary:
+      type: object
+      properties:
+        tenant_id: { type: string, format: uuid }
+        totals:    { $ref: "#/components/schemas/ReportTotals" }
+        rates:     { $ref: "#/components/schemas/ReportRates" }
+        campaigns:
+          type: array
+          items:
+            type: object
+            properties:
+              campaign_id: { type: string, format: uuid }
+              name:        { type: string }
+              status:      { type: string }
+              totals:      { $ref: "#/components/schemas/ReportTotals" }
+              rates:       { $ref: "#/components/schemas/ReportRates" }
     ContactInput:
       type: object
       required: [email]

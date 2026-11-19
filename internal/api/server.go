@@ -25,6 +25,7 @@ import (
 	"phishforge/internal/httpx"
 	"phishforge/internal/llmdraft"
 	"phishforge/internal/recipient"
+	"phishforge/internal/report"
 	"phishforge/internal/sendingprofile"
 	"phishforge/internal/suppression"
 	tmpl "phishforge/internal/template"
@@ -76,6 +77,7 @@ type Server struct {
 	keys         *apikey.Service
 	engines    *engine.Manager
 	engineRepo *enginerepo.Repository
+	reports      *report.Repository
 }
 
 // NewServer constructs an API server from its dependencies.
@@ -100,6 +102,7 @@ func NewServer(d Deps) *Server {
 		keys:         apikey.NewService(d.Pool),
 		engines:    d.Engines,
 		engineRepo: enginerepo.NewRepository(),
+		reports:      report.NewRepository(),
 	}
 }
 
@@ -118,11 +121,15 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Authenticate(s.identifier()))
 
-			// Platform-level: tenant administration (admin only).
-			r.With(auth.RequireRole(auth.RoleAdmin)).Route("/tenants", func(r chi.Router) {
-				r.Post("/", s.createTenant)
-				r.Get("/", s.listTenants)
-				r.Get("/{id}", s.getTenant)
+			// Platform-level tenant administration (admin only), plus the M8
+			// per-tenant report rollup (operator, own tenant only). Kept in one
+			// route group so /tenants/{id}/summary is not shadowed by the mount;
+			// roles are applied per-route, not to the whole group.
+			r.Route("/tenants", func(r chi.Router) {
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/", s.createTenant)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Get("/", s.listTenants)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Get("/{id}", s.getTenant)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/summary", s.tenantSummary)
 			})
 
 			// Campaigns, scoped to the principal's tenant (operator or above).
@@ -137,6 +144,9 @@ func (s *Server) Router() http.Handler {
 				r.Post("/{id}/send", s.sendCampaign)
 				r.Post("/{id}/engine", s.bindEngine)
 				r.Get("/{id}/engine", s.getEngineForCampaign)
+				// M8 reporting: read-only KPI aggregates (operator).
+				r.Get("/{id}/report", s.campaignReport)
+				r.Get("/{id}/report.csv", s.campaignReportCSV)
 			})
 
 			// Dashboard activity feed: recent audit entries + events (operator).

@@ -48,8 +48,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 - [~] M7 OSINT (services/osint-py FastAPI: subdomains (subfinder/crt.sh),
       dnstwist-style generation, RDAP availability, VT reputation — done;
       amass + Go orchestrator wiring still TODO)
-- [~] M8 Dashboard (web/ operator console done; timelines, KPIs, executive PDF,
-      tenant portals still TODO)
+- [~] M8 Dashboard (web/ operator console + reporting/KPI aggregation
+      (internal/report, campaign+tenant endpoints, CSV) done; executive PDF,
+      tenant portals, dashboard charts still TODO)
 - [ ] M9 Secondary vectors (SMS, QR, BitB injects, Asterisk vishing + local TTS)
 - [ ] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
 
@@ -62,6 +63,35 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M8 reporting + KPI aggregation — COMPLETE (read-only).
+- Done (M8 reporting):
+  - internal/report: read-only aggregates over events + campaign_targets +
+    recipients + contacts. No writes; exposes only per-state counts, rates,
+    timelines, and per-recipient state/timestamps — never captured secret
+    material. Funnel = recipients reaching each stage or beyond (linear path);
+    bounced/failed reported separately. Single-query GROUP BY aggregates
+    (state histogram, per-type timeline via date_trunc hour|day, per-recipient
+    FILTER-aggregate drilldown, tenant rollup) — no N+1.
+  - HTTP (operator, tenant-scoped, audited): GET /campaigns/{id}/report
+    (totals+rates+timeline, ?bucket=hour|day), GET /campaigns/{id}/report.csv
+    (flat per-recipient export), GET /tenants/{id}/summary (portfolio rollup;
+    own tenant only, 403 cross-tenant). The /tenants group was refactored to
+    per-route roles so the operator summary coexists with the admin routes
+    under one mount. Read access audited (report.view/export/tenant_summary).
+  - Migration 0010: idx_events_campaign_type_time (campaign_id, type,
+    occurred_at) for per-type timeline aggregation. OpenAPI 0.8.1 (0.8.0 was
+    already taken by M5) with the three endpoints + Report/Tenant schemas.
+  - Tests: test/integration/report_test.go — seeds a 3-recipient funnel
+    (clicked/creds/sent), asserts totals (sent3/delivered2/opened2/clicked2/
+    creds1), clicked rate ~0.667, timeline sent=3, CSV header+3 rows with
+    correct states, tenant rollup totals, and cross-tenant 403. Passing.
+  - Verification: go build/vet clean; report test + the rest of the suite
+    green EXCEPT one PRE-EXISTING failure unrelated to M8 —
+    TestCampaignLaunchAndTracking (tracking_test.go:124) expects a bogus /t
+    token to 404, but the M5 rework made trackClick return a 200 neutral page
+    (and thread a _pft token to engine-bound landings). Verified to fail on
+    main before M8 (git stash), left untouched (M5 tracking/capture area).
+    Dev DB migrated to 0010.
 - Milestone: M7 OSINT microservice (services/osint-py) — COMPLETE (standalone).
 - Done (M7 OSINT):
   - services/osint-py: FastAPI (Python 3.12+), hatchling pyproject, Dockerfile,
