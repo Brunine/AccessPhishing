@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
 	github.com/hibiken/asynq v0.26.0
 	github.com/jackc/pgx/v5 v5.6.0

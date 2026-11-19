@@ -147,6 +147,7 @@ func (s *Server) Router() http.Handler {
 				r.With(auth.RequireRole(auth.RoleAdmin)).Get("/", s.listTenants)
 				r.With(auth.RequireRole(auth.RoleAdmin)).Get("/{id}", s.getTenant)
 				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/summary", s.tenantSummary)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/summary.pdf", s.tenantSummaryPDF)
 			})
 
 			// Campaigns, scoped to the principal's tenant (operator or above).
@@ -164,6 +165,7 @@ func (s *Server) Router() http.Handler {
 				// M8 reporting: read-only KPI aggregates (operator).
 				r.Get("/{id}/report", s.campaignReport)
 				r.Get("/{id}/report.csv", s.campaignReportCSV)
+				r.Get("/{id}/report.pdf", s.campaignReportPDF)
 			})
 
 			// Dashboard activity feed: recent audit entries + events (operator).

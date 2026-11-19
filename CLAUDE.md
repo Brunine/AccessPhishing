@@ -49,8 +49,8 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 - [~] M7 OSINT (services/osint-py FastAPI + Go orchestrator client/endpoints
       (internal/osintclient, /api/v1/osint/*) done; amass still TODO)
 - [~] M8 Dashboard (web/ operator console + reporting/KPI aggregation +
-      dashboard charts (funnel, timeline, tenant overview) done; executive PDF
-      + tenant portals still TODO)
+      dashboard charts + executive PDF export done; multi-tenant portals still
+      TODO)
 - [ ] M9 Secondary vectors (SMS, QR, BitB injects, Asterisk vishing + local TTS)
 - [ ] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
 
@@ -63,6 +63,33 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M8 build-out part 3 — executive PDF export.
+- Dependency choice: github.com/go-pdf/fpdf v0.9.0 — pure Go (no CGO, no
+  browser, no network at render), MIT-licensed (NOT MPL/AGPL; safe to vendor).
+  Chosen over chromedp/headless and over AGPL libs (e.g. unidoc).
+- Done (M8 PDF export):
+  - internal/pdfexport: pure row-mappers (FunnelRows, TimelineRows,
+    RecipientRows, CampaignSummaryRows, OSINTHighlightRows) with per-table caps
+    (truncated flag) — unit-tested against fixed structs; and pdf.go which
+    renders via fpdf with a page header (PhishForge — <tenant>), footer
+    (generated timestamp + Page x/{nb} + a truncation note when any table was
+    capped), auto page-break pagination, and shaded tables.
+  - HTTP (operator, tenant-scoped, audited): GET /campaigns/{id}/report.pdf
+    (?bucket=hour|day — funnel + timeline table + per-recipient drilldown,
+    states+timestamps only) and GET /tenants/{id}/summary.pdf (own tenant only,
+    403 else — aggregate funnel + per-campaign rates + OSINT highlights counts).
+    Both REUSE the same report.Repository functions as the JSON/CSV handlers
+    (report.Campaign / Recipients / TenantSummary) so numbers can't diverge.
+    Content-Type application/pdf; Content-Disposition filename from campaign/
+    tenant name + date. Rendered to a buffer (fpdf builds in memory) so render
+    errors return cleanly before headers are sent.
+  - OpenAPI 0.9.3 (both .pdf endpoints). Audited report.pdf /
+    report.tenant_summary.pdf.
+  - Tests: internal/pdfexport/rows_test.go (cell-value assertions for every
+    mapper incl. truncation + zero-recipient guard); test/integration/
+    report_pdf_test.go (renders both endpoints + hourly bucket, asserts %PDF-
+    magic + >800 bytes, cross-tenant 403, audit count). go build/vet/test clean;
+    full suite green; gofmt-clean.
 - Milestone: web/ Recon view for the OSINT endpoints.
 - Done (OSINT web view):
   - api client + types: osint.status / osint.collect(domain) / osint.results;
