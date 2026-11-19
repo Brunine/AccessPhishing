@@ -71,15 +71,15 @@ type CampaignReport struct {
 // RecipientRow is one flat per-recipient drilldown row (for CSV export). It
 // carries only state and stage timestamps — never captured credentials.
 type RecipientRow struct {
-	Email            string     `json:"email"`
-	State            string     `json:"state"`
-	SentAt           *time.Time `json:"sent_at,omitempty"`
-	DeliveredAt      *time.Time `json:"delivered_at,omitempty"`
-	OpenedAt         *time.Time `json:"opened_at,omitempty"`
-	ClickedAt        *time.Time `json:"clicked_at,omitempty"`
-	CredsAt          *time.Time `json:"creds_at,omitempty"`
+	Email             string     `json:"email"`
+	State             string     `json:"state"`
+	SentAt            *time.Time `json:"sent_at,omitempty"`
+	DeliveredAt       *time.Time `json:"delivered_at,omitempty"`
+	OpenedAt          *time.Time `json:"opened_at,omitempty"`
+	ClickedAt         *time.Time `json:"clicked_at,omitempty"`
+	CredsAt           *time.Time `json:"creds_at,omitempty"`
 	SessionHijackedAt *time.Time `json:"session_hijacked_at,omitempty"`
-	LastEventAt      *time.Time `json:"last_event_at,omitempty"`
+	LastEventAt       *time.Time `json:"last_event_at,omitempty"`
 }
 
 // CampaignSummary is a per-campaign rollup used in the tenant portfolio view.

@@ -17,9 +17,9 @@ import (
 	"phishforge/internal/auth"
 	"phishforge/internal/campaign"
 	"phishforge/internal/contact"
+	"phishforge/internal/crypto"
 	"phishforge/internal/engine"
 	"phishforge/internal/enginerepo"
-	"phishforge/internal/crypto"
 	"phishforge/internal/events"
 	"phishforge/internal/group"
 	"phishforge/internal/httpx"
@@ -77,8 +77,8 @@ type Server struct {
 	profiles     *sendingprofile.Repository
 	approvals    *approval.Repository
 	keys         *apikey.Service
-	engines    *engine.Manager
-	engineRepo *enginerepo.Repository
+	engines      *engine.Manager
+	engineRepo   *enginerepo.Repository
 	reports      *report.Repository
 }
 
@@ -103,8 +103,8 @@ func NewServer(d Deps) *Server {
 		profiles:     sendingprofile.NewRepository(),
 		approvals:    approval.NewRepository(),
 		keys:         apikey.NewService(d.Pool),
-		engines:    d.Engines,
-		engineRepo: enginerepo.NewRepository(),
+		engines:      d.Engines,
+		engineRepo:   enginerepo.NewRepository(),
 		reports:      report.NewRepository(),
 	}
 }
@@ -239,7 +239,7 @@ func (s *Server) Router() http.Handler {
 			r.Use(newRateLimiter(600, time.Minute).middleware)
 			r.Post("/api/v1/engines/{id}/events", s.engineEvents)
 		})
-		
+
 	})
 
 	// Public tracking (token-authenticated via path; no auth middleware),

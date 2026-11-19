@@ -17,7 +17,7 @@ import (
 )
 
 type bindEngineBody struct {
-	EngineID   string  `json:"engine_id"`  // required; empty string unbinds
+	EngineID   string  `json:"engine_id"`   // required; empty string unbinds
 	PublicHost *string `json:"public_host"` // optional override for URL resolution
 }
 

@@ -19,15 +19,15 @@ var ErrNotFound = errors.New("enginerepo: not found")
 
 // Engine is a registered engine row.
 type Engine struct {
-	ID         uuid.UUID  `json:"id"`
-	TenantID   uuid.UUID  `json:"tenant_id"`
-	Name       string     `json:"name"`
-	Config     string     `json:"config"`
-	Status     string     `json:"status"`
-	LastError  *string    `json:"last_error,omitempty"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID        uuid.UUID  `json:"id"`
+	TenantID  uuid.UUID  `json:"tenant_id"`
+	Name      string     `json:"name"`
+	Config    string     `json:"config"`
+	Status    string     `json:"status"`
+	LastError *string    `json:"last_error,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // ValidStatus reports whether s is a valid engine_status enum value.

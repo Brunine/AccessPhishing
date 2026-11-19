@@ -28,9 +28,9 @@ const HealthPath = "/engineproxy-health"
 
 // Server is the running proxy instance for one engine config.
 type Server struct {
-	cfg     engineconfig.Config
-	logger  *slog.Logger
-	httpSrv *http.Server
+	cfg         engineconfig.Config
+	logger      *slog.Logger
+	httpSrv     *http.Server
 	interceptor *Interceptor
 }
 

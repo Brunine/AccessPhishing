@@ -184,7 +184,6 @@ func (r *Repository) LandingURLByID(ctx context.Context, q db.Querier, id uuid.U
 	return url, nil
 }
 
-
 // LandingRedirectByID returns a campaign's landing URL and engine binding by
 // id (no tenant scope; the public tracking redirect is authorized by the
 // recipient token). The engine binding decides whether the victim token is

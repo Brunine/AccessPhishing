@@ -10,20 +10,20 @@ import (
 
 // Config holds process-wide settings resolved at startup.
 type Config struct {
-	APIAddr         string
-	DatabaseURL     string
-	RedisAddr       string
-	BaseURL         string
-	ArtifactEncKey  string
-	SendConcurrency int
-	LLMBaseURL      string
-	LLMModel        string
-	LLMTimeout      time.Duration
-	Env             string
+	APIAddr           string
+	DatabaseURL       string
+	RedisAddr         string
+	BaseURL           string
+	ArtifactEncKey    string
+	SendConcurrency   int
+	LLMBaseURL        string
+	LLMModel          string
+	LLMTimeout        time.Duration
+	Env               string
 	EngineBinaryPath  string
 	EngineMaxRestarts int
 	EngineBackoff     time.Duration
-	EngineDataDir string
+	EngineDataDir     string
 
 	// Microsoft Graph delivery channel (all optional; missing => SMTP-only).
 	LoginBaseURL      string
@@ -53,20 +53,20 @@ type Config struct {
 // It returns an error when a required value is missing.
 func Load() (Config, error) {
 	c := Config{
-		APIAddr:         getenv("API_ADDR", ":8080"),
-		DatabaseURL:     os.Getenv("DATABASE_URL"),
-		RedisAddr:       getenv("REDIS_ADDR", "localhost:6379"),
-		BaseURL:         getenv("BASE_URL", "http://localhost:8080"),
-		ArtifactEncKey:  os.Getenv("ARTIFACT_ENC_KEY"),
-		SendConcurrency: getenvInt("SEND_CONCURRENCY", 10),
-		LLMBaseURL:      os.Getenv("LLM_BASE_URL"),
-		LLMModel:        getenv("LLM_MODEL", "llama3.1:8b"),
-		LLMTimeout:      getenvDuration("LLM_TIMEOUT", 120*time.Second),
-		Env:             getenv("APP_ENV", "dev"),
+		APIAddr:           getenv("API_ADDR", ":8080"),
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		RedisAddr:         getenv("REDIS_ADDR", "localhost:6379"),
+		BaseURL:           getenv("BASE_URL", "http://localhost:8080"),
+		ArtifactEncKey:    os.Getenv("ARTIFACT_ENC_KEY"),
+		SendConcurrency:   getenvInt("SEND_CONCURRENCY", 10),
+		LLMBaseURL:        os.Getenv("LLM_BASE_URL"),
+		LLMModel:          getenv("LLM_MODEL", "llama3.1:8b"),
+		LLMTimeout:        getenvDuration("LLM_TIMEOUT", 120*time.Second),
+		Env:               getenv("APP_ENV", "dev"),
 		EngineBinaryPath:  os.Getenv("ENGINE_BINARY_PATH"),
 		EngineMaxRestarts: getenvInt("ENGINE_MAX_RESTARTS", 3),
 		EngineBackoff:     getenvDuration("ENGINE_BACKOFF", 1*time.Second),
-		EngineDataDir: getenv("ENGINE_DATA_DIR", "data/engines"),
+		EngineDataDir:     getenv("ENGINE_DATA_DIR", "data/engines"),
 
 		LoginBaseURL:      getenv("LOGIN_BASE_URL", "https://login.microsoftonline.com"),
 		GraphBaseURL:      getenv("GRAPH_BASE_URL", "https://graph.microsoft.com"),

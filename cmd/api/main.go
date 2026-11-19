@@ -83,11 +83,9 @@ func main() {
 			Cipher:   cipher,
 			Enqueuer: enqueuer,
 			LLM:      llmClient,
-			Engines: engManager,
+			Engines:  engManager,
 		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
-		
-		
 	}
 
 	go func() {

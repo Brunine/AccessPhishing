@@ -42,12 +42,12 @@ const (
 
 // Status is a point-in-time snapshot of a managed process.
 type Status struct {
-	State      State
-	Pid        int
-	StartedAt  time.Time
-	ExitedAt   *time.Time
-	ExitErr    string
-	Restarts   int // restarts performed for the current Start call
+	State     State
+	Pid       int
+	StartedAt time.Time
+	ExitedAt  *time.Time
+	ExitErr   string
+	Restarts  int // restarts performed for the current Start call
 }
 
 // Manager supervises child processes keyed by caller-chosen ids (the API
@@ -331,4 +331,3 @@ func (m *Manager) Running(id string) bool {
 	st, ok := m.Status(id)
 	return ok && st.State == StateRunning
 }
-

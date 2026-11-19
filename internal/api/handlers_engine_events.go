@@ -40,7 +40,7 @@ func newEngineCallbackToken() (token, hash string, err error) {
 // engineEventIn is the ingest body posted by an engine proxy.
 type engineEventIn struct {
 	Type       string          `json:"type"`
-	Token      string          `json:"token"`       // the victim's _pft value
+	Token      string          `json:"token"` // the victim's _pft value
 	OccurredAt *time.Time      `json:"occurred_at,omitempty"`
 	Payload    json.RawMessage `json:"payload,omitempty"`
 }

@@ -9,11 +9,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
-	"io"
 
 	"gopkg.in/yaml.v3"
 )
@@ -296,4 +296,3 @@ func validateUpstream(ve *ValidationError, u *Upstream) {
 
 // Validate re-checks an already-parsed Config (used before each Start).
 func (c *Config) Validate() error { return c.validate() }
-

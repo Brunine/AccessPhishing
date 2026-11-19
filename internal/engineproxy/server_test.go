@@ -2,19 +2,19 @@ package engineproxy
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
-	"io"
 
 	"phishforge/internal/engineconfig"
 )
 
 func testConfig(listenAddr, upstreamHost string, upstreamPort int, upstreamScheme string) engineconfig.Config {
 	return engineconfig.Config{
-		Kind: "proxy",
+		Kind:     "proxy",
 		Listener: &engineconfig.Listener{ListenAddr: listenAddr},
 		Upstream: &engineconfig.Upstream{Scheme: upstreamScheme, Host: upstreamHost, Port: upstreamPort},
 	}
