@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit (build, vet, internal tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./internal/... -count=1
+
+  integration:
+    name: Integration (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: phishforge
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: phishforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U phishforge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # setupDB (test/integration) reads TEST_DATABASE_URL as a MAINTENANCE DSN
+      # (it CREATEs/DROPs throwaway phishforge_test_* databases), so it points at
+      # the default 'postgres' database.
+      TEST_DATABASE_URL: postgres://phishforge:devpass@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install golang-migrate
+        run: |
+          curl -fsSL https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz \
+            | tar xz
+          sudo mv migrate /usr/local/bin/migrate
+          migrate -version
+      - name: Apply migrations (validates the migration set)
+        run: migrate -path migrations -database "postgres://phishforge:devpass@localhost:5432/phishforge?sslmode=disable" up
+      - name: Integration tests
+        run: go test ./test/integration/ -count=1
+
+  gofmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi

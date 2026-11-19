@@ -65,6 +65,13 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- CI: .github/workflows/ci.yml (push to main + PRs) — unit (build/vet/
+  go test ./internal/...), integration (postgres:16 service, golang-migrate,
+  go test ./test/integration/ with TEST_DATABASE_URL), and gofmt jobs; setup-go
+  uses go-version-file: go.mod. NOTE: the gofmt job currently FAILS — 15 files
+  (mostly M5 engine code + a few touched later) are not gofmt-clean on Linux;
+  no production code was reformatted (per the CI task's "no production code
+  changes"). Run `gofmt -w .` once to green the gate when desired.
 - Milestone: M3 finish — API delivery channels + bounce ingest.
 - Done (M3 finish):
   - Migration 0012: sending_profiles.channel (delivery_channel enum
