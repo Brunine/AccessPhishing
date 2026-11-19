@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -119,15 +120,17 @@ func TestCampaignLaunchAndTracking(t *testing.T) {
 		t.Fatalf("events after tracking: want 2, got %d", n)
 	}
 
-	// bogus tokens: /t 404, /px still 200 gif, and no new events
-	if code, _ := get("/t/not-a-real-token"); code != http.StatusNotFound {
-		t.Fatalf("bogus click: want 404, got %d", code)
+	// bogus tokens: /t returns the 200 neutral page (anti-enumeration — the
+	// status code must not reveal whether a token exists), /px still 200 gif,
+	// and neither records an event (no state for a nonexistent recipient).
+	if code, respBody := get("/t/not-a-real-token"); code != http.StatusOK || !strings.Contains(respBody, "Thank you.") {
+		t.Fatalf("bogus click: want 200 neutral page, got %d (%s)", code, respBody)
 	}
 	if code, _ := get("/px/not-a-real-token"); code != http.StatusOK {
 		t.Fatalf("bogus pixel: want 200 (no leak), got %d", code)
 	}
 	if n := count(t, ctx, pool, `SELECT count(*) FROM events WHERE campaign_id=$1`, camp.ID); n != 2 {
-		t.Fatalf("events after bogus: want 2, got %d", n)
+		t.Fatalf("events after bogus: want 2 (no new rows for a nonexistent recipient), got %d", n)
 	}
 
 	// launch audit recorded
