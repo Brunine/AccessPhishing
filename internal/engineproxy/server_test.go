@@ -34,7 +34,7 @@ func TestProxyForwardsToUpstream(t *testing.T) {
 	hostPort := up.URL[len("http://"):]
 	host, port := splitHostPort(t, hostPort)
 
-	srv, err := New(testConfig("127.0.0.1:0", host, port, "http"), slog.Default())
+	srv, err := New(testConfig("127.0.0.1:0", host, port, "http"), slog.Default(), nil)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestProxyForwardsToUpstream(t *testing.T) {
 }
 
 func TestHealthPathServedLocally(t *testing.T) {
-	srv, err := New(testConfig("127.0.0.1:0", "invalid.invalid", 80, "http"), slog.Default())
+	srv, err := New(testConfig("127.0.0.1:0", "invalid.invalid", 80, "http"), slog.Default(), nil)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -103,11 +103,11 @@ func TestHealthPathServedLocally(t *testing.T) {
 }
 
 func TestNewRejectsMissingSections(t *testing.T) {
-	if _, err := New(engineconfig.Config{Kind: "proxy"}, slog.Default()); err == nil {
+	if _, err := New(engineconfig.Config{Kind: "proxy"}, slog.Default(), nil); err == nil {
 		t.Fatal("want error for missing listener")
 	}
 	cfg := engineconfig.Config{Kind: "proxy", Listener: &engineconfig.Listener{ListenAddr: "127.0.0.1:80"}}
-	if _, err := New(cfg, slog.Default()); err == nil {
+	if _, err := New(cfg, slog.Default(), nil); err == nil {
 		t.Fatal("want error for missing upstream")
 	}
 }

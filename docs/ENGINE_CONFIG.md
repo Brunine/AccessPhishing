@@ -52,3 +52,16 @@ Sections describing listener addresses, upstream targets, and TLS
 material will be added to this schema and validator in the next
 increment. Passing configs containing such sections today fails with
 "unknown field" — intentionally.
+
+## `capture` section (part 3b)
+
+Optional. When present, the engine inspects proxied traffic and reports
+matched events to the orchestrator over the configured callback:
+
+```yaml
+capture:
+  credential_form_fields: ["username", "password"]  # POST form/JSON field names that mark a credential submission
+  session_cookies: ["JSESSIONID", "SESSIONID"]      # Set-Cookie names harvested from upstream responses
+  form_action_contains: "/login"                    # optional URL-path filter for credential events (empty = any path)
+  token_query_key: "_pft"                           # query param carrying the recipient token; stripped before forwarding
+  max_body_bytes: 65536    

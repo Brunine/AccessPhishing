@@ -31,11 +31,12 @@ type Server struct {
 	cfg     engineconfig.Config
 	logger  *slog.Logger
 	httpSrv *http.Server
+	interceptor *Interceptor
 }
 
 // New builds a Server from a validated config. Parse (not just Validate)
 // must have produced cfg so defaults are applied.
-func New(cfg engineconfig.Config, logger *slog.Logger) (*Server, error) {
+func New(cfg engineconfig.Config, logger *slog.Logger, ic *Interceptor) (*Server, error) {
 	if cfg.Listener == nil || cfg.Listener.ListenAddr == "" {
 		return nil, errors.New("engineproxy: config has no listener section")
 	}
@@ -45,7 +46,7 @@ func New(cfg engineconfig.Config, logger *slog.Logger) (*Server, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{cfg: cfg, logger: logger}, nil
+	return &Server{cfg: cfg, logger: logger, interceptor: ic}, nil
 }
 
 // upstreamURL resolves the configured upstream into a base URL.
@@ -73,6 +74,10 @@ func (s *Server) newReverseProxy(target *url.URL) *httputil.ReverseProxy {
 			s.logger.Error("proxy error", "method", r.Method, "path", r.URL.Path, "err", err)
 			w.WriteHeader(http.StatusBadGateway)
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			s.interceptor.InspectResponse(resp)
+			return nil
+		},
 	}
 	return rp
 }
@@ -92,7 +97,6 @@ func (s *Server) newTransport() http.RoundTripper {
 	return t
 }
 
-// handler routes health locally and proxies everything else.
 func (s *Server) handler(rp *httputil.ReverseProxy) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(HealthPath, func(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +107,12 @@ func (s *Server) handler(rp *httputil.ReverseProxy) http.Handler {
 	// Root catch-all proxies; /engineproxy-health never reaches it because
 	// ServeMux serves the longest registered pattern first.
 	mux.Handle("/", rp)
-	return mux
+
+	// Wrap the whole mux with the capture middleware (nil-safe: a nil
+	// interceptor returns next unchanged).
+	var h http.Handler = mux
+	h = s.interceptor.RequestMiddleware(h)
+	return h
 }
 
 // Start binds the configured listener and serves until Stop.

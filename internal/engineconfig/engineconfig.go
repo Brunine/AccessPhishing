@@ -72,6 +72,18 @@ type Config struct {
 	StopTimeoutMs int               `yaml:"stop_timeout_ms"`
 	Listener      *Listener         `yaml:"listener"`
 	Upstream      *Upstream         `yaml:"upstream"`
+	Capture       *Capture          `yaml:"capture,omitempty"`
+}
+
+// Capture defines traffic-inspection rules for a traffic-handling engine.
+// Credential field names and session cookie names are matched against
+// observed requests/responses; matched items are reported as events.
+type Capture struct {
+	CredentialFormFields []string `yaml:"credential_form_fields"`
+	SessionCookies       []string `yaml:"session_cookies"`
+	FormActionContains   string   `yaml:"form_action_contains,omitempty"`
+	TokenQueryKey        string   `yaml:"token_query_key,omitempty"`
+	MaxBodyBytes         int64    `yaml:"max_body_bytes,omitempty"`
 }
 
 // Defaults applied after parsing.
@@ -136,6 +148,14 @@ func (c *Config) applyDefaults() {
 	if c.StopTimeoutMs == 0 {
 		c.StopTimeoutMs = DefaultStopTimeoutMs
 	}
+	if c.Capture != nil {
+		if c.Capture.MaxBodyBytes == 0 {
+			c.Capture.MaxBodyBytes = 65536
+		}
+		if c.Capture.TokenQueryKey == "" {
+			c.Capture.TokenQueryKey = "_pft"
+		}
+	}
 }
 
 func (c *Config) validate() error {
@@ -185,6 +205,35 @@ func (c *Config) validate() error {
 
 	if len(ve.Errors) > 0 {
 		return &ve
+	}
+
+	if c.Capture != nil {
+		cap := c.Capture
+		if len(cap.CredentialFormFields) > 32 {
+			ve.addf("capture.credential_form_fields has %d entries, max 32", len(cap.CredentialFormFields))
+		}
+		for i, f := range cap.CredentialFormFields {
+			if len(f) < 1 || len(f) > 128 {
+				ve.addf("capture.credential_form_fields[%d] must be 1..128 chars", i)
+			}
+		}
+		if len(cap.SessionCookies) > 32 {
+			ve.addf("capture.session_cookies has %d entries, max 32", len(cap.SessionCookies))
+		}
+		for i, s := range cap.SessionCookies {
+			if len(s) < 1 || len(s) > 128 {
+				ve.addf("capture.session_cookies[%d] must be 1..128 chars", i)
+			}
+		}
+		if len(cap.FormActionContains) > 256 {
+			ve.addf("capture.form_action_contains is %d chars, max 256", len(cap.FormActionContains))
+		}
+		if cap.MaxBodyBytes < 0 || cap.MaxBodyBytes > 1<<20 {
+			ve.addf("capture.max_body_bytes %d out of range 0..1048576", cap.MaxBodyBytes)
+		}
+		if len(cap.TokenQueryKey) > 64 {
+			ve.addf("capture.token_query_key is %d chars, max 64", len(cap.TokenQueryKey))
+		}
 	}
 	return nil
 }
