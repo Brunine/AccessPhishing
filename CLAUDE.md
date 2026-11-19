@@ -46,9 +46,8 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 - [x] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline;
       configurable prompt-template library with strict declared-variable
       validation, dry-run render, and generate-by-template)
-- [~] M7 OSINT (services/osint-py FastAPI: subdomains (subfinder/crt.sh),
-      dnstwist-style generation, RDAP availability, VT reputation — done;
-      amass + Go orchestrator wiring still TODO)
+- [~] M7 OSINT (services/osint-py FastAPI + Go orchestrator client/endpoints
+      (internal/osintclient, /api/v1/osint/*) done; amass still TODO)
 - [~] M8 Dashboard (web/ operator console + reporting/KPI aggregation
       (internal/report, campaign+tenant endpoints, CSV) done; executive PDF,
       tenant portals, dashboard charts still TODO)
@@ -64,6 +63,34 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M7 build-out — OSINT service wired into the Go orchestrator.
+- Done (M7 orchestrator wiring):
+  - internal/osintclient: Go client for services/osint-py. New(baseURL, apiKey,
+    timeout) returns nil when baseURL empty (feature disabled). Health(ctx) ->
+    GET /health; Collect(ctx, domain) aggregates POST /recon/subdomains + POST
+    /domains/generate + POST /domains/availability (lookalikes capped at 50)
+    into a Result mirroring the service's shapes. Capped response read; total
+    timeout from OSINT_TIMEOUT. AUTH: the service uses the X-OSINT-TOKEN header
+    (not bearer — see services/osint-py/app/deps.py), so the client sends
+    OSINT_API_KEY in that header; deviates from the task's "bearer" wording to
+    match the service exactly, as instructed. Passive aggregation only; the
+    orchestrator never scans.
+  - Migration 0013: osint_results (tenant_id, domain, result jsonb, created_by,
+    UNIQUE(tenant_id, domain)); recollect UPSERTs (latest result per domain).
+    internal/osintresult repo (Upsert, List).
+  - HTTP (operator, tenant-scoped, audited): GET /osint/status (reachability;
+    503 when unconfigured), POST /osint/collect {domain} (503 when unconfigured/
+    unreachable; stores + returns the row; audited osint.collect), GET
+    /osint/results. api.Deps gained OSINT api.OSINTClient; cmd/api builds it
+    only when configured (untyped-nil when disabled).
+  - config: OSINT_BASE_URL, OSINT_API_KEY, OSINT_TIMEOUT (all optional; missing
+    => /osint 503). .env.example updated. OpenAPI 0.9.2 (/osint paths +
+    OSINTResult schema).
+  - Tests: test/integration/osint_test.go — httptest fake OSINT service:
+    status ok, collect aggregates subdomains+lookalikes+availability and upserts
+    (recollect = 1 row), results list, invalid domain 400, audit count;
+    unreachable service -> status 'down' (200) + collect 503; nil client ->
+    503 on both. go build/vet/test clean; full suite green; dev DB at 0013.
 - Milestone: M3 part 2 — Gmail sender + IMAP bounce fetch (M3 now fully done).
 - Done (M3 part 2):
   - internal/delivery/gmail.go: real gmailSender. OAuth2 refresh-token flow vs

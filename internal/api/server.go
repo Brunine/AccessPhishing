@@ -24,6 +24,8 @@ import (
 	"phishforge/internal/group"
 	"phishforge/internal/httpx"
 	"phishforge/internal/llmdraft"
+	"phishforge/internal/osintclient"
+	"phishforge/internal/osintresult"
 	"phishforge/internal/prompttpl"
 	"phishforge/internal/recipient"
 	"phishforge/internal/report"
@@ -47,6 +49,13 @@ type LLMClient interface {
 	Model() string
 }
 
+// OSINTClient aggregates passive public info via the OSINT microservice. A nil
+// value means the feature is disabled (osint endpoints return 503).
+type OSINTClient interface {
+	Health(ctx context.Context) error
+	Collect(ctx context.Context, domain string) (osintclient.Result, error)
+}
+
 // Deps are the dependencies required to build a Server.
 type Deps struct {
 	Pool     *pgxpool.Pool
@@ -55,6 +64,7 @@ type Deps struct {
 	Enqueuer Enqueuer
 	LLM      LLMClient
 	Engines  *engine.Manager
+	OSINT    OSINTClient
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -80,6 +90,8 @@ type Server struct {
 	engines      *engine.Manager
 	engineRepo   *enginerepo.Repository
 	reports      *report.Repository
+	osint        OSINTClient
+	osintResults *osintresult.Repository
 }
 
 // NewServer constructs an API server from its dependencies.
@@ -106,6 +118,8 @@ func NewServer(d Deps) *Server {
 		engines:      d.Engines,
 		engineRepo:   enginerepo.NewRepository(),
 		reports:      report.NewRepository(),
+		osint:        d.OSINT,
+		osintResults: osintresult.NewRepository(),
 	}
 }
 
@@ -154,6 +168,14 @@ func (s *Server) Router() http.Handler {
 
 			// Dashboard activity feed: recent audit entries + events (operator).
 			r.With(auth.RequireRole(auth.RoleOperator)).Get("/activity", s.activity)
+
+			// M7 OSINT orchestration: passive public-info aggregation via the
+			// OSINT microservice (operator). No scanning from the API side.
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/osint", func(r chi.Router) {
+				r.Get("/status", s.osintStatus)
+				r.Post("/collect", s.osintCollect)
+				r.Get("/results", s.osintResultsList)
+			})
 
 			// M6 LLM: generate drafts, promote approved drafts to templates
 			// (operator). Draft approval uses the existing /approvals flow with

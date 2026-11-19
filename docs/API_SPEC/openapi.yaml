@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.9.1
+  version: 0.9.2
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -385,6 +385,48 @@ paths:
                         created_at:  { type: string, format: date-time }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+
+  /osint/status:
+    get:
+      operationId: osintStatus
+      summary: OSINT service reachability (operator)
+      description: >
+        M7 (0.9.2). Health-checks the OSINT microservice. 503 when OSINT is
+        unconfigured (OSINT_BASE_URL unset).
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { service: { type: string, enum: [ok, down] } } } } } }
+        "503": { description: OSINT unconfigured, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /osint/collect:
+    post:
+      operationId: osintCollect
+      summary: Collect passive OSINT for a domain and store it (operator)
+      description: >
+        M7 (0.9.2). Delegates to the OSINT microservice (passive public-info
+        aggregation only — no scanning from the API): subdomain enumeration,
+        lookalike generation, and RDAP availability of the lookalikes. The
+        aggregate result is upserted into osint_results (one row per tenant+
+        domain). 503 when OSINT is unconfigured or unreachable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain: { type: string }
+      responses:
+        "201": { description: Collected, content: { application/json: { schema: { $ref: "#/components/schemas/OSINTResult" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "503": { description: OSINT unconfigured or unreachable, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /osint/results:
+    get:
+      operationId: osintResults
+      summary: List stored OSINT results (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/OSINTResult" } } } } } } }
 
   /llm/generate:
     post:
@@ -1109,6 +1151,37 @@ components:
         is_default:    { type: boolean }
         created_at:    { type: string, format: date-time }
         updated_at:    { type: string, format: date-time }
+    OSINTResult:
+      type: object
+      description: A stored OSINT collection (one per tenant+domain; recollect upserts).
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        domain:     { type: string }
+        created_by: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+        result:
+          type: object
+          description: Aggregated passive collection (mirrors the OSINT service's shapes).
+          properties:
+            domain:           { type: string }
+            subdomain_source: { type: string }
+            subdomains:       { type: array, items: { type: string } }
+            lookalikes:
+              type: array
+              items:
+                type: object
+                properties:
+                  domain: { type: string }
+                  fuzzer: { type: string }
+            availability:
+              type: array
+              items:
+                type: object
+                properties:
+                  domain:      { type: string }
+                  available:   { type: boolean, nullable: true }
+                  status_code: { type: integer, nullable: true }
     LLMDraft:
       type: object
       description: An LLM-generated content record awaiting review. Promoted to a Template only after approval.

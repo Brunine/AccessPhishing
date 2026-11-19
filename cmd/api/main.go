@@ -17,6 +17,7 @@ import (
 	"phishforge/internal/db"
 	"phishforge/internal/engine"
 	"phishforge/internal/llm"
+	"phishforge/internal/osintclient"
 	"phishforge/internal/tasks"
 )
 
@@ -75,6 +76,16 @@ func main() {
 		logger.Warn("ENGINE_BINARY_PATH not set; engine start/stop disabled")
 	}
 
+	// OSINT client only when configured; untyped-nil interface when disabled so
+	// handlers see s.osint == nil (no typed-nil).
+	var osintClient api.OSINTClient
+	if c := osintclient.New(cfg.OSINTBaseURL, cfg.OSINTAPIKey, cfg.OSINTTimeout); c != nil {
+		osintClient = c
+		logger.Info("osint enabled", "base", cfg.OSINTBaseURL)
+	} else {
+		logger.Warn("OSINT_BASE_URL not set; /osint endpoints disabled")
+	}
+
 	srv := &http.Server{
 		Addr: cfg.APIAddr,
 		Handler: api.NewServer(api.Deps{
@@ -84,6 +95,7 @@ func main() {
 			Enqueuer: enqueuer,
 			LLM:      llmClient,
 			Engines:  engManager,
+			OSINT:    osintClient,
 		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

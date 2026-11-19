@@ -40,6 +40,11 @@ type Config struct {
 	GmailClientSecret string
 	GmailRefreshToken string
 
+	// OSINT microservice (all optional; missing => /osint endpoints 503).
+	OSINTBaseURL string
+	OSINTAPIKey  string
+	OSINTTimeout time.Duration
+
 	// Bounce mailbox (IMAP). Optional; missing => no bounce polling.
 	IMAPHost     string
 	IMAPPort     int
@@ -79,6 +84,10 @@ func Load() (Config, error) {
 		GmailClientID:     os.Getenv("GMAIL_CLIENT_ID"),
 		GmailClientSecret: os.Getenv("GMAIL_CLIENT_SECRET"),
 		GmailRefreshToken: os.Getenv("GMAIL_REFRESH_TOKEN"),
+
+		OSINTBaseURL: os.Getenv("OSINT_BASE_URL"),
+		OSINTAPIKey:  os.Getenv("OSINT_API_KEY"),
+		OSINTTimeout: getenvDuration("OSINT_TIMEOUT", 30*time.Second),
 
 		IMAPHost:     os.Getenv("IMAP_HOST"),
 		IMAPPort:     getenvInt("IMAP_PORT", 993),
