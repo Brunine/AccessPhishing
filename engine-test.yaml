@@ -1,0 +1,7 @@
+﻿kind: proxy
+listener:
+  listen_addr: 127.0.0.1:8443
+upstream:
+  scheme: https
+  host: example.com
+  port: 443

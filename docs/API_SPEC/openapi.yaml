@@ -728,7 +728,7 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { stdout: { type: string }, stderr: { type: string } } } } } }
         "409": { $ref: "#/components/responses/Problem" }
-  /api/v1/engines/{id}/events:
+  /engines/{id}/events:
     post:
       operationId: ingestEngineEvents
       summary: Engine capture-only event ingest (per-run bearer token)
@@ -742,17 +742,31 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [type, token]
-              properties:
-                type: { type: string, enum: [creds, session_hijacked] }
-                token: { type: string, description: victim _pft token }
-                occurred_at: { type: string, format: date-time }
-                payload:
-                  type: object
-                  description: >
-                    Capture-only: the orchestrator persists only field/cookie
-                    NAMES; captured values are discarded at ingest.
+              oneOf:
+                - type: object
+                  required: [events]
+                  properties:
+                    events:
+                      type: array
+                      items:
+                        type: object
+                        required: [recipient_token, kind]
+                        properties:
+                          engine_id:       { type: string }
+                          recipient_token: { type: string, description: victim _pft token }
+                          kind:            { type: string, enum: [creds, session] }
+                          payload:
+                            type: object
+                            description: capture-only — only field/cookie NAMES are persisted
+                          ts: { type: string, format: date-time }
+                - type: object
+                  required: [type, token]
+                  description: legacy single-event shape
+                  properties:
+                    type: { type: string, enum: [creds, session_hijacked] }
+                    token: { type: string }
+                    occurred_at: { type: string, format: date-time }
+                    payload: { type: object }
       responses:
         "202": { description: accepted }
         "400": { $ref: "#/components/responses/Problem" }

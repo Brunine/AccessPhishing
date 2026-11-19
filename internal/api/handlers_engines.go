@@ -181,6 +181,9 @@ func (s *Server) startEngine(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "store callback token hash")
 		return
 	}
+	if cfg.Env == nil {
+		cfg.Env = make(map[string]string, 3)
+	}
 	cfg.Env["ENGINE_CALLBACK_TOKEN"] = callbackToken
 	cfg.Env["ORCHESTRATOR_CALLBACK_URL"] = strings.TrimRight(s.baseURL, "/") +
 		"/api/v1/engines/" + id.String() + "/events"
@@ -243,6 +246,20 @@ func (s *Server) stopEngine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.engines == nil {
+		// Manager disabled: a running/starting row is stale by definition.
+		if e.Status == "running" || e.Status == "starting" {
+			e, err = s.engineRepo.SetStatus(r.Context(), s.pool, p.TenantID, id, "stopped", nil, nil)
+			if err != nil {
+				httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "update engine status")
+				return
+			}
+			httpx.JSON(w, http.StatusOK, e)
+			return
+		}
+		httpx.Problem(w, r, http.StatusConflict, "conflict", "engine is not running")
+		return
+	}
 	_, live := s.engines.Status(id.String())
 	if live {
 		if err := s.engines.Stop(id.String()); err != nil {
