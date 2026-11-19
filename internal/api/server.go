@@ -24,6 +24,7 @@ import (
 	"phishforge/internal/group"
 	"phishforge/internal/httpx"
 	"phishforge/internal/llmdraft"
+	"phishforge/internal/prompttpl"
 	"phishforge/internal/recipient"
 	"phishforge/internal/report"
 	"phishforge/internal/sendingprofile"
@@ -64,6 +65,7 @@ type Server struct {
 	enqueuer     Enqueuer
 	llm          LLMClient
 	drafts       *llmdraft.Repository
+	prompttpls   *prompttpl.Repository
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
 	contacts     *contact.Repository
@@ -89,6 +91,7 @@ func NewServer(d Deps) *Server {
 		enqueuer:     d.Enqueuer,
 		llm:          d.LLM,
 		drafts:       llmdraft.NewRepository(),
+		prompttpls:   prompttpl.NewRepository(),
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
 		contacts:     contact.NewRepository(),
@@ -161,6 +164,18 @@ func (s *Server) Router() http.Handler {
 				r.Get("/drafts/{id}", s.getDraft)
 				r.Post("/drafts/{id}/promote", s.promoteDraft)
 				r.Post("/drafts/{id}/discard", s.discardDraft)
+			})
+
+			// M6 prompt-template library (operator). Templates feed
+			// /llm/generate via an optional template_id; /{id}/render is a
+			// no-LLM dry run.
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/prompt-templates", func(r chi.Router) {
+				r.Post("/", s.createPromptTemplate)
+				r.Get("/", s.listPromptTemplates)
+				r.Get("/{id}", s.getPromptTemplate)
+				r.Patch("/{id}", s.updatePromptTemplate)
+				r.Delete("/{id}", s.deletePromptTemplate)
+				r.Post("/{id}/render", s.renderPromptTemplate)
 			})
 
 			// M3 delivery: templates, sending profiles, approvals (operator).

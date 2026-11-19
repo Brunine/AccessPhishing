@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.8.1
+  version: 0.9.0
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -395,21 +395,25 @@ paths:
         never system instructions), calls the Ollama host, and stores the result
         as an llm_drafts row (status 'draft'). Model output is data, never
         executed or auto-sent. Returns 503 when the LLM is unconfigured or the
-        host is unreachable.
+        host is unreachable. When template_id is set the prompt is built from
+        that stored prompt template (filled from variables) and topic is not
+        required; otherwise the server-owned brief prompt is used (topic
+        required). Added template_id/variables in 0.9.0.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [topic]
               properties:
-                kind:     { type: string, enum: [email, sms, landing], default: email }
-                topic:    { type: string }
-                tone:     { type: string }
-                notes:    { type: string }
-                audience: { type: string }
-                name:     { type: string, description: optional draft/template name }
+                kind:        { type: string, enum: [email, sms, landing], default: email }
+                topic:       { type: string, description: required unless template_id is set }
+                tone:        { type: string }
+                notes:       { type: string }
+                audience:    { type: string }
+                name:        { type: string, description: optional draft name }
+                template_id: { type: string, format: uuid, description: use a stored prompt template }
+                variables:   { type: object, additionalProperties: { type: string }, description: values for the template's declared variables }
       responses:
         "201": { description: Draft created, content: { application/json: { schema: { $ref: "#/components/schemas/LLMDraft" } } } }
         "400": { $ref: "#/components/responses/Problem" }
@@ -451,6 +455,72 @@ paths:
       parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
       responses:
         "200": { description: Discarded, content: { application/json: { schema: { $ref: "#/components/schemas/LLMDraft" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /prompt-templates:
+    post:
+      operationId: createPromptTemplate
+      summary: Create a prompt template (operator)
+      description: >
+        M6 (0.9.0). Declares variables up front; a user_template that references
+        an undeclared variable is rejected (400) at save time. system_prompt is
+        a literal instruction; only user_template is variable-substituted.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PromptTemplateInput" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/PromptTemplate" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    get:
+      operationId: listPromptTemplates
+      summary: List prompt templates (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/PromptTemplate" } } } } } } }
+
+  /prompt-templates/{id}:
+    parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+    get:
+      operationId: getPromptTemplate
+      summary: Get a prompt template (operator)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PromptTemplate" } } } }, "404": { $ref: "#/components/responses/Problem" } }
+    patch:
+      operationId: updatePromptTemplate
+      summary: Update a prompt template (operator); re-validated
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PromptTemplateInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PromptTemplate" } } } }, "400": { $ref: "#/components/responses/Problem" }, "404": { $ref: "#/components/responses/Problem" }, "409": { $ref: "#/components/responses/Problem" } }
+    delete:
+      operationId: deletePromptTemplate
+      summary: Delete a prompt template (operator)
+      responses: { "204": { description: Deleted }, "404": { $ref: "#/components/responses/Problem" } }
+
+  /prompt-templates/{id}/render:
+    post:
+      operationId: renderPromptTemplate
+      summary: Dry-run render against a sample context (operator); no LLM call
+      description: >
+        Renders user_template with declared examples overlaid by any supplied
+        variables and returns the text without contacting the LLM.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                variables: { type: object, additionalProperties: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kind:          { type: string }
+                  system_prompt: { type: string }
+                  rendered_user: { type: string }
+                  prompt:        { type: string }
+                  context:       { type: object, additionalProperties: { type: string } }
         "404": { $ref: "#/components/responses/Problem" }
 
   /templates:
@@ -998,6 +1068,36 @@ components:
         body:       { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    PromptVariable:
+      type: object
+      required: [name]
+      properties:
+        name:        { type: string, description: identifier [A-Za-z_][A-Za-z0-9_]* }
+        example:     { type: string }
+        description: { type: string }
+    PromptTemplateInput:
+      type: object
+      required: [name, user_template]
+      properties:
+        name:          { type: string }
+        kind:          { type: string, enum: [email, sms, landing], default: email }
+        system_prompt: { type: string, description: literal instruction (not variable-substituted) }
+        user_template: { type: string, description: "Go text/template; may only reference declared variables, e.g. {{.FirstName}}" }
+        variables:     { type: array, items: { $ref: "#/components/schemas/PromptVariable" } }
+        is_default:    { type: boolean }
+    PromptTemplate:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        name:          { type: string }
+        kind:          { type: string, enum: [email, sms, landing] }
+        system_prompt: { type: string }
+        user_template: { type: string }
+        variables:     { type: array, items: { $ref: "#/components/schemas/PromptVariable" } }
+        is_default:    { type: boolean }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
     LLMDraft:
       type: object
       description: An LLM-generated content record awaiting review. Promoted to a Template only after approval.

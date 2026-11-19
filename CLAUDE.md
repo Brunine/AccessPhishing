@@ -43,8 +43,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
       done; Graph/Gmail API injection + bounce ingest still TODO)
 - [ ] M4 Tracking (links, pixels, victim state machine webhooks)
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
-- [~] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline
-      done; a configurable prompt-template library still TODO)
+- [x] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline;
+      configurable prompt-template library with strict declared-variable
+      validation, dry-run render, and generate-by-template)
 - [~] M7 OSINT (services/osint-py FastAPI: subdomains (subfinder/crt.sh),
       dnstwist-style generation, RDAP availability, VT reputation — done;
       amass + Go orchestrator wiring still TODO)
@@ -63,6 +64,35 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M6 prompt-template library — COMPLETE (M6 now fully done).
+- Done (M6 prompt-template library):
+  - Migration 0011: prompt_templates (name, kind reuses llm_draft_kind enum,
+    system_prompt, user_template, variables jsonb, is_default, UNIQUE(tenant,
+    name)) + updated_at trigger.
+  - internal/prompttpl: strict rendering. Declared variables ([]{name,example,
+    description}); ValidateUserTemplate parses the Go text/template and rejects
+    any referenced {{.Var}} not declared (save-time 400). system_prompt is a
+    literal; only user_template is substituted. Render uses missingkey=zero (a
+    valid template never errors at render); BuildPrompt = system + "\n\n" +
+    rendered; SampleContext = declared examples overlaid with supplied values.
+    Table-driven unit tests (no DB).
+  - HTTP (operator, tenant-scoped, audited) /prompt-templates: CRUD (create/
+    list/get/patch/delete, re-validated on update, 409 on name clash) + POST
+    /{id}/render (no-LLM dry run returning kind/system_prompt/rendered_user/
+    prompt/context). Mutations + render audited (prompttpl.create/update/
+    delete/render).
+  - /llm/generate gained optional template_id + variables: when set, the prompt
+    is built from the stored template (its kind wins, topic not required) and
+    filled from variables (declared examples as fallback); unset = unchanged
+    server-owned brief prompt (topic required). Bad template_id → 400 before
+    any LLM call.
+  - OpenAPI 0.9.0: /prompt-templates paths + PromptTemplate/PromptTemplateInput/
+    PromptVariable schemas; generate body documents template_id/variables.
+  - Tests: internal/prompttpl unit tests + test/integration/prompttpl_test.go
+    (CRUD, undeclared-var 400, dup 409, dry-run render with override+example,
+    generate-by-template against an unreachable LLM → 503, bogus template_id
+    400, update re-validation, audit counts). go build/vet/test clean; full
+    suite green; dev DB migrated to 0011.
 - Milestone: M8 reporting + KPI aggregation — COMPLETE (read-only).
 - Done (M8 reporting):
   - internal/report: read-only aggregates over events + campaign_targets +

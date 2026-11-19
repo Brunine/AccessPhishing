@@ -6,23 +6,30 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"phishforge/internal/audit"
 	"phishforge/internal/auth"
 	"phishforge/internal/httpx"
 	"phishforge/internal/llmdraft"
+	"phishforge/internal/prompttpl"
 	tmpl "phishforge/internal/template"
 )
 
-// llmGenerateBody is the structured request for a draft. The fields are treated
-// strictly as data: they are interpolated into a server-owned prompt template,
-// never passed to the model as system instructions.
+// llmGenerateBody is the structured request for a draft. The free-form fields
+// are treated strictly as data: they are interpolated into a server-owned
+// prompt, never passed to the model as system instructions. When template_id
+// is set, the prompt is built from that stored prompt template instead, filled
+// from the variables map.
 type llmGenerateBody struct {
-	Kind     string `json:"kind"`
-	Topic    string `json:"topic"`
-	Tone     string `json:"tone"`
-	Notes    string `json:"notes"`
-	Audience string `json:"audience"`
-	Name     string `json:"name"`
+	Kind       string            `json:"kind"`
+	Topic      string            `json:"topic"`
+	Tone       string            `json:"tone"`
+	Notes      string            `json:"notes"`
+	Audience   string            `json:"audience"`
+	Name       string            `json:"name"`
+	TemplateID *uuid.UUID        `json:"template_id"`
+	Variables  map[string]string `json:"variables"`
 }
 
 // buildPrompt assembles the server-owned prompt. User-supplied values are
@@ -97,24 +104,56 @@ func (s *Server) llmGenerate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &b) {
 		return
 	}
-	if b.Kind == "" {
-		b.Kind = "email"
+	p, _ := auth.FromContext(r.Context())
+
+	kind := b.Kind
+	if kind == "" {
+		kind = "email"
 	}
-	if !llmdraft.ValidKind(b.Kind) {
-		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "kind must be one of email, sms, landing")
-		return
+
+	// Resolve the prompt: a stored template (template_id) overrides the
+	// free-form brief. The template's kind wins when one is used.
+	var prompt, summary, nameHint string
+	if b.TemplateID != nil {
+		pt, err := s.prompttpls.GetByID(r.Context(), s.pool, p.TenantID, *b.TemplateID)
+		if errors.Is(err, prompttpl.ErrNotFound) {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "template_id not found in tenant")
+			return
+		}
+		if err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "load prompt template")
+			return
+		}
+		kind = pt.Kind
+		pctx := prompttpl.SampleContext(pt.Variables, b.Variables)
+		prompt, err = prompttpl.BuildPrompt(pt.SystemPrompt, pt.UserTemplate, pctx)
+		if err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "render prompt template")
+			return
+		}
+		summary = "template=" + pt.Name
+		nameHint = pt.Name
+	} else {
+		if !llmdraft.ValidKind(kind) {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "kind must be one of email, sms, landing")
+			return
+		}
+		if strings.TrimSpace(b.Topic) == "" {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "topic is required")
+			return
+		}
+		b.Kind = kind
+		prompt = buildPrompt(b)
+		summary = promptSummary(b)
+		nameHint = oneLine(b.Topic)
 	}
-	if strings.TrimSpace(b.Topic) == "" {
-		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "topic is required")
-		return
-	}
+
 	if s.llm == nil {
 		httpx.Problem(w, r, http.StatusServiceUnavailable, "unavailable", "LLM not configured (set LLM_BASE_URL)")
 		return
 	}
-	p, _ := auth.FromContext(r.Context())
 
-	out, err := s.llm.Generate(r.Context(), buildPrompt(b))
+	out, err := s.llm.Generate(r.Context(), prompt)
 	if err != nil {
 		// The LLM is an optional dependency: an unreachable host or model
 		// failure is surfaced as 503 (unavailable), and the rest of the API
@@ -122,11 +161,11 @@ func (s *Server) llmGenerate(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusServiceUnavailable, "unavailable", "model generation failed: "+err.Error())
 		return
 	}
-	subject, body := parseCompletion(b.Kind, out)
+	subject, body := parseCompletion(kind, out)
 
 	name := strings.TrimSpace(b.Name)
 	if name == "" {
-		name = fmt.Sprintf("%s draft — %s", b.Kind, oneLine(b.Topic))
+		name = fmt.Sprintf("%s draft — %s", kind, nameHint)
 	}
 	if len(name) > 200 {
 		name = name[:200]
@@ -140,8 +179,8 @@ func (s *Server) llmGenerate(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 
 	d, err := s.drafts.Create(r.Context(), tx, p.TenantID, p.UserID, llmdraft.Input{
-		Kind: b.Kind, Name: name, Subject: subject, Body: body,
-		Model: s.llm.Model(), PromptSummary: promptSummary(b),
+		Kind: kind, Name: name, Subject: subject, Body: body,
+		Model: s.llm.Model(), PromptSummary: summary,
 	})
 	if err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "store draft")
