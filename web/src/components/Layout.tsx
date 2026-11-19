@@ -10,6 +10,7 @@ const NAV = [
   { to: "/templates", label: "Templates" },
   { to: "/sending-profiles", label: "Sending Profiles" },
   { to: "/approvals", label: "Approvals" },
+  { to: "/recon", label: "Recon" },
   { to: "/activity", label: "Activity" },
 ];
 

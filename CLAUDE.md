@@ -63,6 +63,21 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: web/ Recon view for the OSINT endpoints.
+- Done (OSINT web view):
+  - api client + types: osint.status / osint.collect(domain) / osint.results;
+    OSINTResult/OSINTCollection/OSINTLookalike/OSINTAvailability/OSINTStatus
+    mirror the 0.9.2 schema.
+  - web/src/pages/Recon.tsx (nav "Recon"): a status pill from /osint/status
+    (ok/down, and 503 => "not configured" with an OSINT_BASE_URL hint); a
+    collect form (domain input, POST /osint/collect, busy state noting the call
+    may take up to OSINT_TIMEOUT; 400 => inline field error, 503 => "service
+    unreachable" banner); and a results list of stored collections (domain +
+    collected-at) with native <details> sections for subdomains (count + list +
+    source), lookalike candidates (domain + fuzzer), and RDAP availability
+    (available/registered/unknown badges). Passive public info rendered as-is.
+  - Verification: `npm run build` clean (tsc --noEmit + vite build, 50 modules).
+    No Go changes.
 - Milestone: M8 build-out part 2 — dashboard charts over the report endpoints.
 - Done (M8 charts, web/):
   - Hand-rolled SVG/div charts (web/src/components/charts.tsx — no new deps):

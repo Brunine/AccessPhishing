@@ -207,6 +207,38 @@ export interface TenantSummary {
   campaigns: CampaignSummary[];
 }
 
+export interface OSINTLookalike {
+  domain: string;
+  fuzzer: string;
+}
+
+export interface OSINTAvailability {
+  domain: string;
+  available: boolean | null;
+  status_code?: number;
+}
+
+export interface OSINTCollection {
+  domain: string;
+  subdomain_source: string;
+  subdomains: string[];
+  lookalikes: OSINTLookalike[];
+  availability: OSINTAvailability[];
+}
+
+export interface OSINTResult {
+  id: string;
+  tenant_id: string;
+  domain: string;
+  created_by?: string;
+  created_at: string;
+  result: OSINTCollection;
+}
+
+export interface OSINTStatus {
+  service: "ok" | "down";
+}
+
 export interface ListResponse<T> {
   items: T[];
   limit?: number;

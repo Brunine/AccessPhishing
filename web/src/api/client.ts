@@ -13,6 +13,8 @@ import type {
   Group,
   ImportResult,
   ListResponse,
+  OSINTResult,
+  OSINTStatus,
   SendingProfile,
   Template,
   Tenant,
@@ -262,4 +264,12 @@ export const api = {
 
   activity: (limit = 50) =>
     request<Activity>("GET", `/activity?limit=${limit}`),
+
+  osint: {
+    status: () => request<OSINTStatus>("GET", "/osint/status"),
+    collect: (domain: string) =>
+      request<OSINTResult>("POST", "/osint/collect", { domain }),
+    results: () =>
+      request<ListResponse<OSINTResult>>("GET", "/osint/results").then(items),
+  },
 };
