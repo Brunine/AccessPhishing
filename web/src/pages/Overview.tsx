@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { TenantSummary } from "../api/types";
@@ -25,26 +26,52 @@ export default function Overview() {
     [tenantId]
   );
 
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfErr, setPdfErr] = useState<unknown>(null);
+
+  async function exportPdf() {
+    if (!tenantId) return;
+    setPdfErr(null);
+    setPdfBusy(true);
+    try {
+      await api.tenants.summaryPdf(tenantId);
+    } catch (e) {
+      setPdfErr(e);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader
         title="Overview"
         subtitle="Portfolio-wide funnel rates across your campaigns."
         actions={
-          <button
-            className="btn-ghost"
-            onClick={() => {
-              camps.reload();
-              summary.reload();
-            }}
-          >
-            Refresh
-          </button>
+          <>
+            <button
+              className="btn-ghost"
+              onClick={exportPdf}
+              disabled={pdfBusy || !tenantId}
+            >
+              {pdfBusy ? "Preparing…" : "Download executive summary"}
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => {
+                camps.reload();
+                summary.reload();
+              }}
+            >
+              Refresh
+            </button>
+          </>
         }
       />
 
       <ErrorBanner error={camps.error} />
       <ErrorBanner error={summary.error} />
+      <ErrorBanner error={pdfErr} />
 
       {camps.loading || summary.loading ? (
         <Spinner />

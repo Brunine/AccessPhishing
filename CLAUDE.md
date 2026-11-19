@@ -63,6 +63,17 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: web/ PDF download buttons.
+- Done (web PDF downloads):
+  - client: generalized the CSV blob-download helper to downloadFile (reads the
+    Content-Disposition filename when present, else a fallback; sends the API
+    key). Added campaigns.reportPdf(id, bucket) and tenants.summaryPdf(id).
+  - Campaign detail Report section: "Download PDF" button (uses the current
+    bucket selector) with a loading state, beside the existing CSV button.
+  - Overview page: "Download executive summary" button (tenant id derived from
+    the campaigns list) with a loading state + error banner.
+  - Downloads use the authenticated blob fetch (not window.open), so the
+    X-API-Key header is sent. npm run build clean (50 modules). No Go changes.
 - Milestone: M8 build-out part 3 — executive PDF export.
 - Dependency choice: github.com/go-pdf/fpdf v0.9.0 — pure Go (no CGO, no
   browser, no network at render), MIT-licensed (NOT MPL/AGPL; safe to vendor).

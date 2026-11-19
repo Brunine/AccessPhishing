@@ -142,6 +142,7 @@ function ReportSection({ campaignId }: { campaignId: string }) {
   const report = useAsync(() => api.campaigns.report(campaignId, bucket), [campaignId, bucket]);
   const [csvErr, setCsvErr] = useState<unknown>(null);
   const [downloading, setDownloading] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   // Bounded 30s poll (opt-in). report.reload is stable (useAsync).
   useEffect(() => {
@@ -159,6 +160,18 @@ function ReportSection({ campaignId }: { campaignId: string }) {
       setCsvErr(e);
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function exportPdf() {
+    setCsvErr(null);
+    setPdfBusy(true);
+    try {
+      await api.campaigns.reportPdf(campaignId, bucket);
+    } catch (e) {
+      setCsvErr(e);
+    } finally {
+      setPdfBusy(false);
     }
   }
 
@@ -187,6 +200,9 @@ function ReportSection({ campaignId }: { campaignId: string }) {
           </button>
           <button className="btn-ghost px-2 py-1" onClick={exportCsv} disabled={downloading}>
             {downloading ? "…" : "Download CSV"}
+          </button>
+          <button className="btn-ghost px-2 py-1" onClick={exportPdf} disabled={pdfBusy}>
+            {pdfBusy ? "…" : "Download PDF"}
           </button>
         </div>
       </div>

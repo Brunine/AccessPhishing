@@ -121,21 +121,25 @@ function items<T>(r: ListResponse<T>): T[] {
   return r.items ?? [];
 }
 
-// downloadCsv fetches a CSV export (with the API key) and triggers a browser
-// download. It never renders the payload — the file holds only states and
-// timestamps (the API guarantees no secret material).
-async function downloadCsv(path: string): Promise<void> {
+// downloadFile fetches an export (with the API key) and triggers a browser
+// download. It reads the filename from Content-Disposition when present, else
+// uses the fallback. It never renders the payload — exports carry only states,
+// counts and timestamps (the API guarantees no secret material).
+async function downloadFile(path: string, fallback: string): Promise<void> {
   const res = await fetch(BASE + path, { headers: { "X-API-Key": getKey() } });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new ApiError(res.status, res.statusText, text);
   }
   const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") ?? "";
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  const name = m ? decodeURIComponent(m[1]) : fallback;
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  const name = path.split("/").slice(-2).join("-").replace("?", "_") || "export.csv";
-  a.download = name.endsWith(".csv") ? name : name + ".csv";
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -170,6 +174,8 @@ export const api = {
       request<Tenant>("POST", "/tenants", b),
     summary: (id: string) =>
       request<TenantSummary>("GET", `/tenants/${id}/summary`),
+    summaryPdf: (id: string) =>
+      downloadFile(`/tenants/${id}/summary.pdf`, `tenant-${id}.pdf`),
   },
 
   groups: {
@@ -228,7 +234,10 @@ export const api = {
       request<{ status: string }>("POST", `/campaigns/${id}/send`),
     report: (id: string, bucket: "hour" | "day" = "day") =>
       request<CampaignReport>("GET", `/campaigns/${id}/report?bucket=${bucket}`),
-    reportCsv: (id: string) => downloadCsv(`/campaigns/${id}/report.csv`),
+    reportCsv: (id: string) =>
+      downloadFile(`/campaigns/${id}/report.csv`, `campaign-${id}.csv`),
+    reportPdf: (id: string, bucket: "hour" | "day" = "day") =>
+      downloadFile(`/campaigns/${id}/report.pdf?bucket=${bucket}`, `campaign-${id}.pdf`),
   },
 
   templates: {
