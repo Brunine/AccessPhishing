@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -58,7 +59,7 @@ func (s *Sender) resolveSender(tenantID uuid.UUID, p sendingprofile.Profile) (ch
 	case "graph":
 		return newGraphSender(p, s.graph, secret), nil
 	case "gmail":
-		return &gmailSender{}, nil
+		return newGmailSender(p, s.gmail, secret), nil
 	default:
 		return nil, fmt.Errorf("delivery: unknown channel %q", channel)
 	}
@@ -69,4 +70,22 @@ func orElse(ptr *string, fallback string) string {
 		return *ptr
 	}
 	return fallback
+}
+
+// rfc2822HTML builds an RFC 2822 HTML message (used by the Gmail API, which
+// takes a base64url-encoded raw message).
+func rfc2822HTML(fromAddr, fromName, to, subject, htmlBody string) string {
+	from := fromAddr
+	if fromName != "" {
+		from = fmt.Sprintf("%s <%s>", fromName, fromAddr)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", from)
+	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	b.WriteString("\r\n")
+	b.WriteString(htmlBody)
+	return b.String()
 }

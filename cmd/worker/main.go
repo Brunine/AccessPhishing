@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -53,6 +54,13 @@ func main() {
 		ClientID:     cfg.GraphClientID,
 		ClientSecret: cfg.GraphClientSecret,
 	})
+	sender.UseGmail(delivery.GmailConfig{
+		TokenURL:     cfg.GoogleTokenURL,
+		BaseURL:      cfg.GmailBaseURL,
+		ClientID:     cfg.GmailClientID,
+		ClientSecret: cfg.GmailClientSecret,
+		RefreshToken: cfg.GmailRefreshToken,
+	})
 
 	bounces := bounce.NewRepository(events.NewRepository(pool))
 
@@ -84,12 +92,30 @@ func main() {
 		return nil
 	})
 
-	// The IMAP bounce-mailbox transport is deferred to M3 part 2; only note it.
+	// IMAP bounce poller: when configured, poll the mailbox on an interval,
+	// fetching + ingesting NDRs. Disabled (no-op) when IMAP_HOST is unset.
 	imapCfg := bounce.IMAPConfig{Host: cfg.IMAPHost, Port: cfg.IMAPPort, Username: cfg.IMAPUsername,
 		Password: cfg.IMAPPassword, Mailbox: cfg.IMAPMailbox, UseTLS: cfg.IMAPUseTLS}
 	if imapCfg.Enabled() {
-		logger.Warn("IMAP bounce mailbox configured but poller not yet wired (M3 part 2)",
-			"host", imapCfg.Host, "err", bounce.ErrIMAPNotWired.Error())
+		poller := bounce.NewPoller(imapCfg, pool, bounces)
+		go func() {
+			ticker := time.NewTicker(2 * time.Minute)
+			defer ticker.Stop()
+			for {
+				fetched, enqueued, err := poller.PollOnce(ctx)
+				if err != nil {
+					logger.Error("bounce poll failed", "err", err)
+				} else if fetched > 0 {
+					logger.Info("bounce poll", "fetched", fetched, "enqueued", enqueued)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		logger.Info("IMAP bounce poller started", "host", imapCfg.Host, "mailbox", imapCfg.Mailbox)
 	}
 
 	srv := asynq.NewServer(

@@ -58,6 +58,8 @@ func ParseNDR(raw string) (recipientEmail, messageID string, ok bool) {
 	return recipientEmail, messageID, ok
 }
 
+func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
 func simpleHash(s string) uint64 {
 	var h uint64 = 1469598103934665603
 	for i := 0; i < len(s); i++ {

@@ -37,6 +37,7 @@ type Sender struct {
 	baseURL     string
 	concurrency int
 	graph       GraphConfig
+	gmail       GmailConfig
 }
 
 // NewSender constructs a Sender.

@@ -32,6 +32,14 @@ type Config struct {
 	GraphClientID     string
 	GraphClientSecret string
 
+	// Gmail API delivery channel (all optional). The per-profile encrypted
+	// secret may supply the refresh token instead of GmailRefreshToken.
+	GoogleTokenURL    string
+	GmailBaseURL      string
+	GmailClientID     string
+	GmailClientSecret string
+	GmailRefreshToken string
+
 	// Bounce mailbox (IMAP). Optional; missing => no bounce polling.
 	IMAPHost     string
 	IMAPPort     int
@@ -65,6 +73,12 @@ func Load() (Config, error) {
 		GraphTenantID:     os.Getenv("GRAPH_TENANT_ID"),
 		GraphClientID:     os.Getenv("GRAPH_CLIENT_ID"),
 		GraphClientSecret: os.Getenv("GRAPH_CLIENT_SECRET"),
+
+		GoogleTokenURL:    getenv("GOOGLE_TOKEN_URL", "https://oauth2.googleapis.com/token"),
+		GmailBaseURL:      getenv("GMAIL_BASE_URL", "https://gmail.googleapis.com"),
+		GmailClientID:     os.Getenv("GMAIL_CLIENT_ID"),
+		GmailClientSecret: os.Getenv("GMAIL_CLIENT_SECRET"),
+		GmailRefreshToken: os.Getenv("GMAIL_REFRESH_TOKEN"),
 
 		IMAPHost:     os.Getenv("IMAP_HOST"),
 		IMAPPort:     getenvInt("IMAP_PORT", 993),

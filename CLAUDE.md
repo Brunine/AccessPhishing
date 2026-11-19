@@ -39,9 +39,8 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 ## MODULES (build order)
 - [ ] M1 Orchestrator core (API, schema, RBAC, audit)
 - [x] M2 Target management (import, grouping, suppression, policies)
-- [~] M3 Delivery engine (SMTP + Microsoft Graph channels, approval gate, Asynq
-      worker, bounce NDR parse/ingest/process done; Gmail send + the IMAP bounce
-      fetch transport are M3 part 2)
+- [x] M3 Delivery engine (SMTP + Microsoft Graph + Gmail channels, approval
+      gate, Asynq worker, bounce NDR parse/ingest/process + IMAP poller)
 - [ ] M4 Tracking (links, pixels, victim state machine webhooks)
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
 - [x] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline;
@@ -65,6 +64,35 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M3 part 2 — Gmail sender + IMAP bounce fetch (M3 now fully done).
+- Done (M3 part 2):
+  - internal/delivery/gmail.go: real gmailSender. OAuth2 refresh-token flow vs
+    GOOGLE_TOKEN_URL (client_id/secret + refresh_token), in-memory access-token
+    cache (60s early refresh), RFC 2822 HTML message base64url-encoded and
+    POSTed to {GMAIL_BASE_URL}/gmail/v1/users/me/messages/send, 429 Retry-After
+    with one bounded retry (shared parseRetryAfter). Profile api_client_id
+    overrides client id; the encrypted `secret` supplies the refresh token
+    (else GMAIL_REFRESH_TOKEN). Sender.UseGmail(cfg); cmd/worker wires it.
+  - internal/bounce/imap.go: real Poller over go-imap/v2 (beta.9). PollOnce is
+    config-gated (no-op when IMAP_HOST unset): DialTLS/DialInsecure, login,
+    select, SEARCH UNSEEN, FETCH body, per message ParseNDR -> resolve owning
+    tenant/campaign by recipient email (shared mailbox) -> Enqueue -> mark
+    \Seen only after a successful enqueue (STORE), then Process affected
+    tenants. IngestRaw(ctx, raws) is the transport-independent core (reused by
+    a future Graph inbox webhook + tests). cmd/worker runs PollOnce on a 2m
+    ticker when enabled.
+  - config: GOOGLE_TOKEN_URL, GMAIL_BASE_URL, GMAIL_CLIENT_ID/CLIENT_SECRET/
+    REFRESH_TOKEN (all optional). .env.example updated. go.mod adds
+    github.com/emersion/go-imap/v2 (+ go-message, go-sasl). OpenAPI unchanged
+    (no new user-facing fields — gmail reuses channel/secret/api_client_id from
+    0.9.1).
+  - Tests: internal/delivery/gmail_test.go (httptest fake token+send: bearer,
+    base64url RFC 2822 body, token caching = 1 fetch for 2 sends, secret->
+    refresh override, missing-creds fail-fast). test/integration/
+    bounce_poller_test.go (IngestRaw end-to-end: raw NDR -> tenant/campaign
+    attribution -> bounced event + state; idempotent per message-id; unknown
+    recipient skipped; disabled PollOnce no-op). go build/vet/test clean; full
+    suite green.
 - CI: .github/workflows/ci.yml (push to main + PRs) — unit (build/vet/
   go test ./internal/...), integration (postgres:16 service, golang-migrate,
   go test ./test/integration/ with TEST_DATABASE_URL), and gofmt jobs; setup-go
