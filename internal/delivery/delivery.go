@@ -36,6 +36,7 @@ type Sender struct {
 	profiles    *sendingprofile.Repository
 	baseURL     string
 	concurrency int
+	graph       GraphConfig
 }
 
 // NewSender constructs a Sender.
@@ -86,13 +87,9 @@ func (s *Sender) SendCampaign(ctx context.Context, tenantID, campaignID uuid.UUI
 		return Result{}, fmt.Errorf("delivery: load profile: %w", err)
 	}
 
-	password := ""
-	if profile.PassEncrypted != nil && *profile.PassEncrypted != "" {
-		pt, err := s.cipher.Decrypt(tenantID, *profile.PassEncrypted)
-		if err != nil {
-			return Result{}, fmt.Errorf("delivery: decrypt smtp password: %w", err)
-		}
-		password = string(pt)
+	chSender, err := s.resolveSender(tenantID, profile)
+	if err != nil {
+		return Result{}, err
 	}
 
 	subjectTpl, err := template.New("subject").Option("missingkey=zero").Parse(deref(tpl.Subject))
@@ -136,7 +133,7 @@ func (s *Sender) SendCampaign(ctx context.Context, tenantID, campaignID uuid.UUI
 				evType = events.TypeFailed
 			} else if err := bodyTpl.Execute(&body, data); err != nil {
 				evType = events.TypeFailed
-			} else if err := sendMail(profile, password, t.email, subj.String(), body.String()); err != nil {
+			} else if err := chSender.Send(ctx, t.email, subj.String(), body.String()); err != nil {
 				evType = events.TypeFailed
 			}
 

@@ -28,30 +28,48 @@ func ValidTLSMode(m string) bool {
 	}
 }
 
-// Profile is an SMTP sending profile. PassEncrypted is never serialized.
+// ValidChannel reports whether c is a valid delivery_channel enum value.
+func ValidChannel(c string) bool {
+	switch c {
+	case "smtp", "graph", "gmail":
+		return true
+	default:
+		return false
+	}
+}
+
+// Profile is a sending profile. Channel selects the transport (smtp|graph|
+// gmail). PassEncrypted is the AES-256-GCM envelope of the per-channel secret
+// (SMTP password or API client secret) and is never serialized.
 type Profile struct {
-	ID           uuid.UUID `json:"id"`
-	TenantID     uuid.UUID `json:"tenant_id"`
-	Name         string    `json:"name"`
-	SMTPHost     string    `json:"smtp_host"`
-	SMTPPort     int       `json:"smtp_port"`
-	SMTPUser     *string   `json:"smtp_user,omitempty"`
-	PassEncrypted *string  `json:"-"`
-	FromAddress  string    `json:"from_address"`
-	FromName     *string   `json:"from_name,omitempty"`
-	TLSMode      string    `json:"tls_mode"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            uuid.UUID `json:"id"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	Name          string    `json:"name"`
+	Channel       string    `json:"channel"`
+	SMTPHost      string    `json:"smtp_host"`
+	SMTPPort      int       `json:"smtp_port"`
+	SMTPUser      *string   `json:"smtp_user,omitempty"`
+	PassEncrypted *string   `json:"-"`
+	APITenantID   *string   `json:"api_tenant_id,omitempty"`
+	APIClientID   *string   `json:"api_client_id,omitempty"`
+	FromAddress   string    `json:"from_address"`
+	FromName      *string   `json:"from_name,omitempty"`
+	TLSMode       string    `json:"tls_mode"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Input carries the fields of a sending profile; PassEncrypted is the sealed
-// SMTP password (empty when the server requires no auth).
+// per-channel secret (empty when none is required).
 type Input struct {
 	Name          string
+	Channel       string
 	SMTPHost      string
 	SMTPPort      int
 	SMTPUser      string
 	PassEncrypted string
+	APITenantID   string
+	APIClientID   string
 	FromAddress   string
 	FromName      string
 	TLSMode       string
@@ -63,12 +81,12 @@ type Repository struct{}
 // NewRepository returns a sending-profile repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const cols = `id, tenant_id, name, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, from_address, from_name, tls_mode, created_at, updated_at`
+const cols = `id, tenant_id, name, channel, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, api_tenant_id, api_client_id, from_address, from_name, tls_mode, created_at, updated_at`
 
 func scanProfile(row pgx.Row) (Profile, error) {
 	var p Profile
-	if err := row.Scan(&p.ID, &p.TenantID, &p.Name, &p.SMTPHost, &p.SMTPPort, &p.SMTPUser,
-		&p.PassEncrypted, &p.FromAddress, &p.FromName, &p.TLSMode, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := row.Scan(&p.ID, &p.TenantID, &p.Name, &p.Channel, &p.SMTPHost, &p.SMTPPort, &p.SMTPUser,
+		&p.PassEncrypted, &p.APITenantID, &p.APIClientID, &p.FromAddress, &p.FromName, &p.TLSMode, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return Profile{}, err
 	}
 	return p, nil
@@ -83,11 +101,16 @@ func nullIfEmpty(s string) any {
 
 // Create inserts a sending profile and returns it.
 func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID uuid.UUID, in Input) (Profile, error) {
+	channel := in.Channel
+	if channel == "" {
+		channel = "smtp"
+	}
 	const sql = `INSERT INTO sending_profiles
-	             (tenant_id, name, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, from_address, from_name, tls_mode)
-	             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::tls_mode) RETURNING ` + cols
-	p, err := scanProfile(q.QueryRow(ctx, sql, tenantID, in.Name, in.SMTPHost, in.SMTPPort,
-		nullIfEmpty(in.SMTPUser), nullIfEmpty(in.PassEncrypted), in.FromAddress, nullIfEmpty(in.FromName), in.TLSMode))
+	             (tenant_id, name, channel, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, api_tenant_id, api_client_id, from_address, from_name, tls_mode)
+	             VALUES ($1, $2, $3::delivery_channel, $4, $5, $6, $7, $8, $9, $10, $11, $12::tls_mode) RETURNING ` + cols
+	p, err := scanProfile(q.QueryRow(ctx, sql, tenantID, in.Name, channel, in.SMTPHost, in.SMTPPort,
+		nullIfEmpty(in.SMTPUser), nullIfEmpty(in.PassEncrypted), nullIfEmpty(in.APITenantID), nullIfEmpty(in.APIClientID),
+		in.FromAddress, nullIfEmpty(in.FromName), in.TLSMode))
 	if err != nil {
 		return Profile{}, fmt.Errorf("sendingprofile: create: %w", err)
 	}

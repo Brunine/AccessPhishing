@@ -24,6 +24,21 @@ type Config struct {
 	EngineMaxRestarts int
 	EngineBackoff     time.Duration
 	EngineDataDir string
+
+	// Microsoft Graph delivery channel (all optional; missing => SMTP-only).
+	LoginBaseURL      string
+	GraphBaseURL      string
+	GraphTenantID     string
+	GraphClientID     string
+	GraphClientSecret string
+
+	// Bounce mailbox (IMAP). Optional; missing => no bounce polling.
+	IMAPHost     string
+	IMAPPort     int
+	IMAPUsername string
+	IMAPPassword string
+	IMAPMailbox  string
+	IMAPUseTLS   bool
 }
 
 // Load reads configuration from environment variables, applying defaults.
@@ -44,6 +59,19 @@ func Load() (Config, error) {
 		EngineMaxRestarts: getenvInt("ENGINE_MAX_RESTARTS", 3),
 		EngineBackoff:     getenvDuration("ENGINE_BACKOFF", 1*time.Second),
 		EngineDataDir: getenv("ENGINE_DATA_DIR", "data/engines"),
+
+		LoginBaseURL:      getenv("LOGIN_BASE_URL", "https://login.microsoftonline.com"),
+		GraphBaseURL:      getenv("GRAPH_BASE_URL", "https://graph.microsoft.com"),
+		GraphTenantID:     os.Getenv("GRAPH_TENANT_ID"),
+		GraphClientID:     os.Getenv("GRAPH_CLIENT_ID"),
+		GraphClientSecret: os.Getenv("GRAPH_CLIENT_SECRET"),
+
+		IMAPHost:     os.Getenv("IMAP_HOST"),
+		IMAPPort:     getenvInt("IMAP_PORT", 993),
+		IMAPUsername: os.Getenv("IMAP_USERNAME"),
+		IMAPPassword: os.Getenv("IMAP_PASSWORD"),
+		IMAPMailbox:  getenv("IMAP_MAILBOX", "INBOX"),
+		IMAPUseTLS:   getenv("IMAP_USE_TLS", "true") == "true",
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: DATABASE_URL is required")

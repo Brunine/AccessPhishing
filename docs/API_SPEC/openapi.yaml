@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.9.0
+  version: 0.9.1
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -556,23 +556,34 @@ paths:
   /sending-profiles:
     post:
       operationId: createSendingProfile
-      summary: Create an SMTP sending profile; smtp_pass is encrypted at rest (operator)
+      summary: Create a sending profile (smtp|graph|gmail); the secret is encrypted at rest (operator)
+      description: >
+        channel selects the transport (0.9.1). smtp requires smtp_host/smtp_port
+        and uses smtp_pass; graph/gmail use from_address as the sender mailbox,
+        optional api_tenant_id/api_client_id, and the secret field (falling back
+        to the process GRAPH_* config). The per-channel secret is AES-256-GCM
+        encrypted and never returned. gmail is accepted but not yet sending (M3
+        part 2).
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name, smtp_host, smtp_port, from_address]
+              required: [name, from_address]
               properties:
-                name:         { type: string }
-                smtp_host:    { type: string }
-                smtp_port:    { type: integer }
-                smtp_user:    { type: string }
-                smtp_pass:    { type: string, description: write-only; AES-256-GCM encrypted, never returned }
-                from_address: { type: string }
-                from_name:    { type: string }
-                tls_mode:     { type: string, enum: [none, starttls, smtps], default: starttls }
+                name:          { type: string }
+                channel:       { type: string, enum: [smtp, graph, gmail], default: smtp }
+                smtp_host:     { type: string, description: required for smtp }
+                smtp_port:     { type: integer, description: required for smtp }
+                smtp_user:     { type: string }
+                smtp_pass:     { type: string, description: smtp secret; write-only, encrypted, never returned }
+                secret:        { type: string, description: API client secret for graph/gmail; write-only, encrypted }
+                api_tenant_id: { type: string, description: e.g. Graph tenant id (non-secret) }
+                api_client_id: { type: string, description: e.g. Graph client id (non-secret) }
+                from_address:  { type: string, description: sender address / mailbox }
+                from_name:     { type: string }
+                tls_mode:      { type: string, enum: [none, starttls, smtps], default: starttls }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SendingProfile" } } } }
         "400": { $ref: "#/components/responses/Problem" }
@@ -1116,19 +1127,22 @@ components:
         updated_at:     { type: string, format: date-time }
     SendingProfile:
       type: object
-      description: smtp_pass is never returned.
+      description: The per-channel secret (smtp_pass / secret) is never returned.
       properties:
-        id:           { type: string, format: uuid }
-        tenant_id:    { type: string, format: uuid }
-        name:         { type: string }
-        smtp_host:    { type: string }
-        smtp_port:    { type: integer }
-        smtp_user:    { type: string, nullable: true }
-        from_address: { type: string }
-        from_name:    { type: string, nullable: true }
-        tls_mode:     { type: string, enum: [none, starttls, smtps] }
-        created_at:   { type: string, format: date-time }
-        updated_at:   { type: string, format: date-time }
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        name:          { type: string }
+        channel:       { type: string, enum: [smtp, graph, gmail] }
+        smtp_host:     { type: string }
+        smtp_port:     { type: integer }
+        smtp_user:     { type: string, nullable: true }
+        api_tenant_id: { type: string, nullable: true }
+        api_client_id: { type: string, nullable: true }
+        from_address:  { type: string }
+        from_name:     { type: string, nullable: true }
+        tls_mode:      { type: string, enum: [none, starttls, smtps] }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
     Engine:
       type: object
       properties:

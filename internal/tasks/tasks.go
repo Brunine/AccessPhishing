@@ -14,6 +14,10 @@ import (
 // TypeCampaignSend is the Asynq task type for delivering a campaign.
 const TypeCampaignSend = "campaign:send"
 
+// TypeBounceIngest is the Asynq task type for processing pending NDRs for a
+// tenant. (Enqueued by the bounce poller once the IMAP transport is wired.)
+const TypeBounceIngest = "bounce:ingest"
+
 // CampaignSendPayload is the JSON payload for a campaign send task.
 type CampaignSendPayload struct {
 	TenantID   uuid.UUID `json:"tenant_id"`
@@ -34,6 +38,29 @@ func ParseCampaignSend(t *asynq.Task) (CampaignSendPayload, error) {
 	var p CampaignSendPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return CampaignSendPayload{}, fmt.Errorf("tasks: unmarshal payload: %w", err)
+	}
+	return p, nil
+}
+
+// BounceIngestPayload is the JSON payload for a bounce ingest task.
+type BounceIngestPayload struct {
+	TenantID uuid.UUID `json:"tenant_id"`
+}
+
+// NewBounceIngestTask builds the Asynq task for processing a tenant's NDRs.
+func NewBounceIngestTask(tenantID uuid.UUID) (*asynq.Task, error) {
+	b, err := json.Marshal(BounceIngestPayload{TenantID: tenantID})
+	if err != nil {
+		return nil, fmt.Errorf("tasks: marshal bounce payload: %w", err)
+	}
+	return asynq.NewTask(TypeBounceIngest, b), nil
+}
+
+// ParseBounceIngest decodes a bounce ingest task payload.
+func ParseBounceIngest(t *asynq.Task) (BounceIngestPayload, error) {
+	var p BounceIngestPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return BounceIngestPayload{}, fmt.Errorf("tasks: unmarshal bounce payload: %w", err)
 	}
 	return p, nil
 }

@@ -39,8 +39,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 ## MODULES (build order)
 - [ ] M1 Orchestrator core (API, schema, RBAC, audit)
 - [x] M2 Target management (import, grouping, suppression, policies)
-- [~] M3 Delivery engine (SMTP send + templates + approval gate + Asynq worker
-      done; Graph/Gmail API injection + bounce ingest still TODO)
+- [~] M3 Delivery engine (SMTP + Microsoft Graph channels, approval gate, Asynq
+      worker, bounce NDR parse/ingest/process done; Gmail send + the IMAP bounce
+      fetch transport are M3 part 2)
 - [ ] M4 Tracking (links, pixels, victim state machine webhooks)
 - [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
 - [x] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline;
@@ -64,6 +65,44 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M3 finish — API delivery channels + bounce ingest.
+- Done (M3 finish):
+  - Migration 0012: sending_profiles.channel (delivery_channel enum
+    smtp|graph|gmail, existing rows backfilled 'smtp' via NOT NULL DEFAULT) +
+    api_tenant_id/api_client_id (non-secret). The per-channel secret (SMTP
+    password OR API client secret) still lives in the AES-256-GCM
+    smtp_pass_encrypted column. New ndr_messages table (dedupe UNIQUE(tenant,
+    message_id); status pending|processed|skipped).
+  - internal/delivery: channelSender interface + resolveSender dispatch by
+    channel. graph.go = Microsoft Graph sender (OAuth2 client-credentials vs
+    LOGIN_BASE_URL/{tenant}/oauth2/v2.0/token, in-memory token cache w/ 60s
+    early refresh, POST {GRAPH_BASE_URL}/v1.0/users/{sender}/sendMail, 429
+    Retry-After with one bounded retry). Profile api fields override env
+    GRAPH_* config. gmail.go = stub returning ErrGmailNotImplemented (fails
+    send clearly -> 'failed' events) for part 2. SMTP path unchanged.
+    Sender.UseGraph(cfg) wires config; cmd/worker sets it.
+  - sendingprofile repo + createSendingProfile: channel-aware. smtp requires
+    smtp_host/port + uses smtp_pass; graph/gmail use from_address as sender
+    mailbox, optional api_tenant_id/api_client_id + `secret`. Secret encrypted
+    via existing cipher; never serialized.
+  - internal/bounce: ParseNDR (RFC 3464 Final/Original-Recipient, else first
+    email in body; Message-ID or deterministic fallback); Enqueue (insert into
+    ndr_messages, ON CONFLICT DO NOTHING => idempotent per message-id); Process
+    (bounded batch: resolve recipient by email, optionally scoped to campaign;
+    append events.TypeBounced -> campaign_target bounced; mark processed/
+    skipped). Worker task bounce:ingest runs Process. IMAP poller is a
+    config-gated stub (ErrIMAPNotWired) — transport deferred to part 2.
+  - config: LOGIN_BASE_URL, GRAPH_BASE_URL, GRAPH_TENANT_ID/CLIENT_ID/
+    CLIENT_SECRET, IMAP_* (all optional; missing => SMTP-only unchanged).
+    .env.example documents them. OpenAPI 0.9.1 (channel + api fields on
+    sending profiles, secret field, SendingProfile schema).
+  - Tests: test/integration/delivery_channels_test.go — graph profile create
+    (secret ciphertext != plaintext at rest, not leaked in response), SMTP
+    profiles still work, graph send with no network config fails gracefully
+    (SendCampaign err=nil, sent=0 failed=2, two 'failed' events), ParseNDR
+    extraction, bounce Enqueue dedupe (2nd insert=false), Process (1 bounced
+    event + target 'bounced', 1 skipped for unknown recipient), re-Process not
+    double-counted. go build/vet/test clean; full suite green; dev DB at 0012.
 - Milestone: M6 prompt-template library — COMPLETE (M6 now fully done).
 - Done (M6 prompt-template library):
   - Migration 0011: prompt_templates (name, kind reuses llm_draft_kind enum,

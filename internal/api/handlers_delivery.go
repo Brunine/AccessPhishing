@@ -198,10 +198,14 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Name        string `json:"name"`
+		Channel     string `json:"channel"`
 		SMTPHost    string `json:"smtp_host"`
 		SMTPPort    int    `json:"smtp_port"`
 		SMTPUser    string `json:"smtp_user"`
 		SMTPPass    string `json:"smtp_pass"`
+		Secret      string `json:"secret"` // API client secret (graph/gmail)
+		APITenantID string `json:"api_tenant_id"`
+		APIClientID string `json:"api_client_id"`
 		FromAddress string `json:"from_address"`
 		FromName    string `json:"from_name"`
 		TLSMode     string `json:"tls_mode"`
@@ -209,16 +213,38 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &b) {
 		return
 	}
-	if b.Name == "" || b.SMTPHost == "" || b.SMTPPort == 0 || b.FromAddress == "" {
-		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "name, smtp_host, smtp_port, from_address are required")
+	if b.Channel == "" {
+		b.Channel = "smtp"
+	}
+	if !sendingprofile.ValidChannel(b.Channel) {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "channel must be one of smtp, graph, gmail")
 		return
 	}
-	if b.TLSMode == "" {
-		b.TLSMode = "starttls"
-	}
-	if !sendingprofile.ValidTLSMode(b.TLSMode) {
-		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "invalid tls_mode")
+	if b.Name == "" || b.FromAddress == "" {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "name and from_address are required")
 		return
+	}
+
+	// The per-channel secret (SMTP password or API client secret) and the
+	// secret source differ by channel.
+	secret := b.SMTPPass
+	if b.Channel == "smtp" {
+		if b.SMTPHost == "" || b.SMTPPort == 0 {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "smtp_host and smtp_port are required for the smtp channel")
+			return
+		}
+		if b.TLSMode == "" {
+			b.TLSMode = "starttls"
+		}
+		if !sendingprofile.ValidTLSMode(b.TLSMode) {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "invalid tls_mode")
+			return
+		}
+	} else {
+		// API channel: from_address is the sender mailbox; smtp_* unused.
+		secret = b.Secret
+		b.SMTPHost, b.SMTPPort, b.SMTPUser = "", 0, ""
+		b.TLSMode = "none"
 	}
 	p, _ := auth.FromContext(r.Context())
 
@@ -227,10 +253,10 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	encrypted := ""
-	if b.SMTPPass != "" {
-		ct, err := s.cipher.Encrypt(p.TenantID, []byte(b.SMTPPass))
+	if secret != "" {
+		ct, err := s.cipher.Encrypt(p.TenantID, []byte(secret))
 		if err != nil {
-			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "encrypt password")
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "encrypt secret")
 			return
 		}
 		encrypted = ct
@@ -244,8 +270,9 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 
 	prof, err := s.profiles.Create(r.Context(), tx, p.TenantID, sendingprofile.Input{
-		Name: b.Name, SMTPHost: b.SMTPHost, SMTPPort: b.SMTPPort, SMTPUser: b.SMTPUser,
-		PassEncrypted: encrypted, FromAddress: b.FromAddress, FromName: b.FromName, TLSMode: b.TLSMode,
+		Name: b.Name, Channel: b.Channel, SMTPHost: b.SMTPHost, SMTPPort: b.SMTPPort, SMTPUser: b.SMTPUser,
+		PassEncrypted: encrypted, APITenantID: b.APITenantID, APIClientID: b.APIClientID,
+		FromAddress: b.FromAddress, FromName: b.FromName, TLSMode: b.TLSMode,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -258,7 +285,7 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 	if err := audit.Write(r.Context(), tx, audit.Entry{
 		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
 		Action: "sending_profile.create", TargetType: "sending_profile", TargetID: prof.ID.String(),
-		Metadata: map[string]any{"name": prof.Name, "host": prof.SMTPHost},
+		Metadata: map[string]any{"name": prof.Name, "channel": prof.Channel, "host": prof.SMTPHost},
 	}); err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "audit write")
 		return

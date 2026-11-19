@@ -9,10 +9,12 @@ import (
 
 	"github.com/hibiken/asynq"
 
+	"phishforge/internal/bounce"
 	"phishforge/internal/config"
 	"phishforge/internal/crypto"
 	"phishforge/internal/db"
 	"phishforge/internal/delivery"
+	"phishforge/internal/events"
 	"phishforge/internal/tasks"
 )
 
@@ -44,6 +46,15 @@ func main() {
 	}
 
 	sender := delivery.NewSender(pool, cipher, cfg.BaseURL, cfg.SendConcurrency)
+	sender.UseGraph(delivery.GraphConfig{
+		LoginBaseURL: cfg.LoginBaseURL,
+		GraphBaseURL: cfg.GraphBaseURL,
+		TenantID:     cfg.GraphTenantID,
+		ClientID:     cfg.GraphClientID,
+		ClientSecret: cfg.GraphClientSecret,
+	})
+
+	bounces := bounce.NewRepository(events.NewRepository(pool))
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(tasks.TypeCampaignSend, func(ctx context.Context, t *asynq.Task) error {
@@ -59,6 +70,27 @@ func main() {
 		logger.Info("campaign sent", "campaign", p.CampaignID, "sent", res.Sent, "failed", res.Failed)
 		return nil
 	})
+	mux.HandleFunc(tasks.TypeBounceIngest, func(ctx context.Context, t *asynq.Task) error {
+		p, err := tasks.ParseBounceIngest(t)
+		if err != nil {
+			return err
+		}
+		processed, skipped, err := bounces.Process(ctx, pool, p.TenantID, 200)
+		if err != nil {
+			logger.Error("bounce ingest failed", "tenant", p.TenantID, "err", err)
+			return err
+		}
+		logger.Info("bounces ingested", "tenant", p.TenantID, "processed", processed, "skipped", skipped)
+		return nil
+	})
+
+	// The IMAP bounce-mailbox transport is deferred to M3 part 2; only note it.
+	imapCfg := bounce.IMAPConfig{Host: cfg.IMAPHost, Port: cfg.IMAPPort, Username: cfg.IMAPUsername,
+		Password: cfg.IMAPPassword, Mailbox: cfg.IMAPMailbox, UseTLS: cfg.IMAPUseTLS}
+	if imapCfg.Enabled() {
+		logger.Warn("IMAP bounce mailbox configured but poller not yet wired (M3 part 2)",
+			"host", imapCfg.Host, "err", bounce.ErrIMAPNotWired.Error())
+	}
 
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
