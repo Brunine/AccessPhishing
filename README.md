@@ -26,6 +26,7 @@ every send, and a full audit trail.
 - **Secrets encrypted at rest**: SMTP/API credentials are sealed with per-tenant
   AES-256-GCM (`ARTIFACT_ENC_KEY`); plaintext is returned once at creation and
   never again.
+  **AiTM engine support**: supervised reverse-proxy engine subprocesses with a capture-only event boundary (see below).
 
 ## Architecture (sketch)
 
@@ -97,9 +98,9 @@ The OSINT microservice is optional and run separately — see
 | M8 Dashboard & reporting | ✅ | KPI aggregation, dashboard charts, CSV + executive PDF export, platform-admin cross-tenant console |
 | Ops | ✅ | operator-managed API keys and users (with last-admin / last-operator-key self-lockout guards) |
 
-Modules M5 (AiTM proxy integration), M9 (secondary vectors), and M10 (reverse
-proxy) are tracked in [`CLAUDE.md`](CLAUDE.md) and are out of scope for this
-README.
+Modules M5 (AiTM proxy integration), M9 (additional delivery channels) 
+and M10 (engine proxy extensions: rewrite rules, per-target configs, 
+TLS automation) are on the roadmap; see CLAUDE.md.
 
 ## Configuration
 
