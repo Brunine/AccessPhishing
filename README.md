@@ -142,6 +142,43 @@ only hard requirement to boot; optional integrations degrade gracefully
 The Python OSINT service has its own environment, documented in
 [`docs/OSINT.md`](docs/OSINT.md).
 
+## Adversary-in-the-Middle engine (M5)
+
+Beyond email delivery, the platform supervises **engine subprocesses** —
+including a built-in reverse-proxy engine (`cmd/engineproxy`) used for
+adversary-in-the-middle (AiTM) simulations:
+
+- **Lifecycle management**: engines are registered with a validated YAML
+  config and started/stopped from the console; the orchestrator supervises
+  the process (graceful stop, restart policy, bounded log capture).
+- **Per-run isolation**: each engine run receives a unique bearer token,
+  stored only as a SHA-256 hash; the plaintext lives solely in the engine
+  process environment.
+- **Capture-only boundary**: the platform records *that* an event occurred —
+  credential submission (form field names) and session issuance (cookie
+  names) — never the submitted values or tokens themselves. This is a
+  deliberate security property: the platform can demonstrate
+  credential-harvesting and MFA-bypass impact without storing material an
+  attacker would want.
+
+A campaign can bind to an engine; when the campaign launches, the engine
+serves the engagement's landing flow and reports events back into the same
+funnel (…→ clicked → creds → session_hijacked) as email campaigns.
+
+## Delivery channels
+
+| Channel | Status | Funnel coverage |
+| --- | --- | --- |
+| Email (SMTP, Microsoft Graph, Gmail) | ✅ | sent → delivered → opened → clicked → creds → session |
+| SMS (smishing) | planned (M9) | sent → clicked → creds → session |
+| QR codes (quishing) | planned (M9) | token issued → clicked → creds → session |
+| Teams / Slack / WhatsApp | planned (M9) | sent → clicked → creds → session |
+| MFA-fatigue simulation | planned (M9, own-org tenants only) | prompt → approved/denied |
+| Voice (vishing) | out of scope | — |
+
+See the roadmap in [`CLAUDE.md`](CLAUDE.md) for the delivery-channel and
+engine-extension plan.
+
 ## Development
 
 ```sh
