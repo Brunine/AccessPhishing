@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"phishforge/internal/db"
+	"phishforge/internal/engagement"
 )
 
 // ErrNotFound is returned when a campaign does not exist within the tenant.
@@ -36,9 +37,14 @@ type Campaign struct {
 	TemplateID       *uuid.UUID `json:"template_id,omitempty"`
 	SendingProfileID *uuid.UUID `json:"sending_profile_id,omitempty"`
 	EngineID         *uuid.UUID `json:"engine_id,omitempty"`
-	CreatedBy        uuid.UUID  `json:"created_by"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	EngagementID     *uuid.UUID `json:"engagement_id,omitempty"`
+	// EngagementStatus is the derived (effective) status label of the bound
+	// engagement — active/authorized/expired/terminated/etc. — populated on
+	// list/detail reads when an engagement is bound, nil otherwise.
+	EngagementStatus *string   `json:"engagement_status,omitempty"`
+	CreatedBy        uuid.UUID `json:"created_by"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // Repository provides campaign persistence. It is stateless; each method takes
@@ -48,37 +54,73 @@ type Repository struct{}
 // NewRepository returns a campaign repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const campaignColumns = `id, tenant_id, name, status, landing_url, template_id, sending_profile_id, engine_id, created_by, created_at, updated_at`
+const campaignColumns = `id, tenant_id, name, status, landing_url, template_id, sending_profile_id, engine_id, engagement_id, created_by, created_at, updated_at`
 
+// joinedColumns adds the bound engagement's stored status + expiry so the
+// derived effective label can be computed in Go without an N+1 lookup.
+const joinedColumns = `c.id, c.tenant_id, c.name, c.status, c.landing_url, c.template_id, c.sending_profile_id, c.engine_id, c.engagement_id, c.created_by, c.created_at, c.updated_at, e.status, e.expires_at`
+
+// scanCampaign scans the base columns (used by RETURNING, no engagement join).
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var (
 		c   Campaign
 		tpl uuid.NullUUID
 		sp  uuid.NullUUID
 		eng uuid.NullUUID
+		eid uuid.NullUUID
 	)
-	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &eng, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &eng, &eid, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Campaign{}, err
 	}
-	if tpl.Valid {
-		id := tpl.UUID
-		c.TemplateID = &id
+	setOpt(&c.TemplateID, tpl)
+	setOpt(&c.SendingProfileID, sp)
+	setOpt(&c.EngineID, eng)
+	setOpt(&c.EngagementID, eid)
+	return c, nil
+}
+
+// scanCampaignJoined scans the base columns plus the bound engagement's status
+// and expiry, and populates the derived EngagementStatus label.
+func scanCampaignJoined(row pgx.Row) (Campaign, error) {
+	var (
+		c         Campaign
+		tpl       uuid.NullUUID
+		sp        uuid.NullUUID
+		eng       uuid.NullUUID
+		eid       uuid.NullUUID
+		engStatus *string
+		engExpiry *time.Time
+	)
+	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &eng, &eid, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &engStatus, &engExpiry); err != nil {
+		return Campaign{}, err
 	}
-	if sp.Valid {
-		id := sp.UUID
-		c.SendingProfileID = &id
-	}
-	if eng.Valid {
-		id := eng.UUID
-		c.EngineID = &id
+	setOpt(&c.TemplateID, tpl)
+	setOpt(&c.SendingProfileID, sp)
+	setOpt(&c.EngineID, eng)
+	setOpt(&c.EngagementID, eid)
+	if engStatus != nil {
+		label := string(engagement.Engagement{
+			Status:    engagement.Status(*engStatus),
+			ExpiresAt: engExpiry,
+		}.Effective(time.Now().UTC()))
+		c.EngagementStatus = &label
 	}
 	return c, nil
 }
 
-// Create inserts a new campaign for a tenant and returns the stored row.
-func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID, createdBy uuid.UUID, name string) (Campaign, error) {
-	const sql = `INSERT INTO campaigns (tenant_id, name, created_by) VALUES ($1, $2, $3) RETURNING ` + campaignColumns
-	c, err := scanCampaign(q.QueryRow(ctx, sql, tenantID, name, createdBy))
+func setOpt(dst **uuid.UUID, n uuid.NullUUID) {
+	if n.Valid {
+		id := n.UUID
+		*dst = &id
+	}
+}
+
+// Create inserts a new campaign for a tenant and returns the stored row. An
+// optional engagementID binds the campaign to its authorizing engagement at
+// creation time; the caller is responsible for validating same-tenant ownership.
+func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID, createdBy uuid.UUID, name string, engagementID *uuid.UUID) (Campaign, error) {
+	const sql = `INSERT INTO campaigns (tenant_id, name, created_by, engagement_id) VALUES ($1, $2, $3, $4) RETURNING ` + campaignColumns
+	c, err := scanCampaign(q.QueryRow(ctx, sql, tenantID, name, createdBy, engagementID))
 	if err != nil {
 		return Campaign{}, fmt.Errorf("campaign: create: %w", err)
 	}
@@ -87,8 +129,10 @@ func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID, created
 
 // GetByID loads a campaign by id within a tenant, or ErrNotFound.
 func (r *Repository) GetByID(ctx context.Context, q db.Querier, tenantID, id uuid.UUID) (Campaign, error) {
-	const sql = `SELECT ` + campaignColumns + ` FROM campaigns WHERE tenant_id = $1 AND id = $2`
-	c, err := scanCampaign(q.QueryRow(ctx, sql, tenantID, id))
+	const sql = `SELECT ` + joinedColumns + `
+	             FROM campaigns c LEFT JOIN engagements e ON e.id = c.engagement_id
+	             WHERE c.tenant_id = $1 AND c.id = $2`
+	c, err := scanCampaignJoined(q.QueryRow(ctx, sql, tenantID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Campaign{}, ErrNotFound
 	}
@@ -100,7 +144,9 @@ func (r *Repository) GetByID(ctx context.Context, q db.Querier, tenantID, id uui
 
 // ListByTenant returns a tenant's campaigns, newest first.
 func (r *Repository) ListByTenant(ctx context.Context, q db.Querier, tenantID uuid.UUID, limit, offset int) ([]Campaign, error) {
-	const sql = `SELECT ` + campaignColumns + ` FROM campaigns WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	const sql = `SELECT ` + joinedColumns + `
+	             FROM campaigns c LEFT JOIN engagements e ON e.id = c.engagement_id
+	             WHERE c.tenant_id = $1 ORDER BY c.created_at DESC LIMIT $2 OFFSET $3`
 	rows, err := q.Query(ctx, sql, tenantID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("campaign: list: %w", err)
@@ -109,7 +155,7 @@ func (r *Repository) ListByTenant(ctx context.Context, q db.Querier, tenantID uu
 
 	out := make([]Campaign, 0)
 	for rows.Next() {
-		c, err := scanCampaign(rows)
+		c, err := scanCampaignJoined(rows)
 		if err != nil {
 			return nil, fmt.Errorf("campaign: scan: %w", err)
 		}
@@ -119,6 +165,20 @@ func (r *Repository) ListByTenant(ctx context.Context, q db.Querier, tenantID uu
 		return nil, fmt.Errorf("campaign: iterate: %w", err)
 	}
 	return out, nil
+}
+
+// SetEngagement binds (engagementID non-nil) or unbinds (nil) an engagement to
+// a campaign within a tenant. Returns ErrNotFound if the campaign is absent.
+func (r *Repository) SetEngagement(ctx context.Context, q db.Querier, tenantID, campaignID uuid.UUID, engagementID *uuid.UUID) error {
+	const sql = `UPDATE campaigns SET engagement_id = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`
+	tag, err := q.Exec(ctx, sql, tenantID, campaignID, engagementID)
+	if err != nil {
+		return fmt.Errorf("campaign: set engagement: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateStatus transitions a campaign's lifecycle status within a tenant.

@@ -42,7 +42,8 @@ func TestBouncePollerIngest(t *testing.T) {
 	for _, e := range []string{"alice@target.test", "bob@target.test"} {
 		do(t, srv.URL, http.MethodPost, "/api/v1/contacts", opTok, map[string]any{"email": e, "first_name": "X", "group_id": grp.ID})
 	}
-	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Bounce Drill"})
+	engID := seedAuthorizedEngagement(t, ctx, pool, tn.ID, opID)
+	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Bounce Drill", "engagement_id": engID})
 	var camp struct {
 		ID uuid.UUID `json:"id"`
 	}

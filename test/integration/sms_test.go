@@ -116,7 +116,10 @@ func TestSMSCampaign(t *testing.T) {
 	}
 	mustJSON(t, ng, &ngrp)
 	do(t, srv.URL, http.MethodPost, "/api/v1/contacts", opTok, map[string]any{"email": "nophone@t.test", "group_id": ngrp.ID})
-	_, nc := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "No Phone"})
+	// Bind an authorized engagement so launch reaches the SMS phone gate (the
+	// engagement gate runs first; without a binding this would 403, not 400).
+	engID := seedAuthorizedEngagement(t, ctx, pool, tn.ID, opID)
+	_, nc := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "No Phone", "engagement_id": engID})
 	var ncamp struct {
 		ID uuid.UUID `json:"id"`
 	}
@@ -128,7 +131,7 @@ func TestSMSCampaign(t *testing.T) {
 	}
 
 	// --- happy campaign: launch (has phone) ---
-	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Smish Drill"})
+	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Smish Drill", "engagement_id": engID})
 	var camp struct {
 		ID uuid.UUID `json:"id"`
 	}

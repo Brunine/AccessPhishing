@@ -12,6 +12,8 @@ import type {
   CampaignTarget,
   CreatedAPIKey,
   Contact,
+  Engagement,
+  EngagementInput,
   Group,
   ImportResult,
   ListResponse,
@@ -209,7 +211,10 @@ export const api = {
     list: () =>
       request<ListResponse<Campaign>>("GET", "/campaigns").then(items),
     get: (id: string) => request<Campaign>("GET", `/campaigns/${id}`),
-    create: (b: { name: string }) => request<Campaign>("POST", "/campaigns", b),
+    create: (b: { name: string; engagement_id?: string }) =>
+      request<Campaign>("POST", "/campaigns", b),
+    patch: (id: string, b: { status?: string; engagement_id?: string }) =>
+      request<Campaign>("PATCH", `/campaigns/${id}`, b),
     launch: (
       id: string,
       b: {
@@ -263,6 +268,22 @@ export const api = {
     create: (b: Record<string, unknown>) =>
       request<SendingProfile>("POST", "/sending-profiles", b),
     remove: (id: string) => request<void>("DELETE", `/sending-profiles/${id}`),
+  },
+
+  engagements: {
+    list: () =>
+      request<ListResponse<Engagement>>("GET", "/engagements").then(items),
+    get: (id: string) => request<Engagement>("GET", `/engagements/${id}`),
+    create: (b: EngagementInput) =>
+      request<Engagement>("POST", "/engagements", b),
+    update: (id: string, b: EngagementInput) =>
+      request<Engagement>("PATCH", `/engagements/${id}`, b),
+    requestAuthorization: (id: string) =>
+      request<Engagement>("POST", `/engagements/${id}/request-authorization`),
+    authorize: (id: string) =>
+      request<Engagement>("POST", `/engagements/${id}/authorize`),
+    terminate: (id: string) =>
+      request<Engagement>("POST", `/engagements/${id}/terminate`),
   },
 
   approvals: {

@@ -6,6 +6,7 @@ import { ErrorBanner } from "./ui";
 const NAV = [
   { to: "/overview", label: "Overview" },
   { to: "/campaigns", label: "Campaigns" },
+  { to: "/engagements", label: "Engagements" },
   { to: "/contacts", label: "Contacts" },
   { to: "/templates", label: "Templates" },
   { to: "/sending-profiles", label: "Sending Profiles" },

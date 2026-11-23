@@ -1,9 +1,14 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.9.7
+  version: 0.10.0
   description: >
-    0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
+    0.10.0 adds M8a engagements (/engagements): the authorization container for
+    campaigns. A campaign must be bound to an authorized, unexpired,
+    non-terminated engagement before it can be launched or sent (403 when
+    unbound/unauthorized, 409 when expired/terminated). 0.8.0 added M5 part 1:
+    managed engine registry and lifecycle (/engines) backed by an out-of-process
+    supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
   - url: /api/v1
 security:
@@ -135,7 +140,13 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
-            example: { name: "Q4 Awareness Sim" }
+                engagement_id:
+                  type: string
+                  format: uuid
+                  description: >
+                    Optional authorizing engagement (same tenant, 400 otherwise).
+                    Required to be authorized/unexpired before launch or send.
+            example: { name: "Q4 Awareness Sim", engagement_id: "…" }
       responses:
         "201":
           description: Created
@@ -182,8 +193,12 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
     patch:
-      operationId: updateCampaignStatus
-      summary: Transition a campaign's status (operator)
+      operationId: updateCampaign
+      summary: Transition a campaign's status and/or bind its engagement (operator)
+      description: >
+        At least one of status / engagement_id must be present. Rebinding the
+        engagement is only allowed while the campaign is still a draft (409
+        after launch, to keep the authorization audit trail stable).
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -192,9 +207,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [status]
               properties:
                 status: { $ref: "#/components/schemas/CampaignStatus" }
+                engagement_id:
+                  type: string
+                  format: uuid
+                  description: Same-tenant engagement to bind (400 otherwise); draft-only (409 after launch).
             example: { status: "running" }
       responses:
         "200":
@@ -206,6 +224,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Cannot change the engagement after launch, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
   /campaigns/{id}/launch:
     post:
@@ -219,7 +238,10 @@ paths:
           application/json:
             schema:
               type: object
-              description: provide group_id and/or contact_ids; suppressed addresses are skipped
+              description: >
+                provide group_id and/or contact_ids; suppressed addresses are
+                skipped. The campaign must already be bound to an authorized,
+                unexpired engagement (gate order: engagement -> SMS phone -> snapshot).
               properties:
                 group_id:    { type: string, format: uuid }
                 contact_ids: { type: array, items: { type: string, format: uuid } }
@@ -238,9 +260,9 @@ paths:
                   recipients:  { type: integer }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
-        "403": { $ref: "#/components/responses/Problem" }
+        "403": { description: No bound engagement, or the bound engagement is not authorized, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { description: Campaign is not in draft, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "409": { description: Campaign is not in draft, or the bound engagement is expired/terminated, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
   /campaigns/{id}/links:
     get:
@@ -274,15 +296,18 @@ paths:
     post:
       operationId: sendCampaign
       summary: Enqueue delivery of a scheduled campaign (operator)
-      description: Requires status 'scheduled' and an 'approved' approval for the campaign's template.
+      description: >
+        Requires status 'scheduled', a bound authorized+unexpired engagement
+        (re-checked at send time — it may have expired or been terminated since
+        launch), and an 'approved' approval for the campaign's template.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "202": { description: Queued, content: { application/json: { schema: { type: object, properties: { campaign_id: { type: string, format: uuid }, status: { type: string, enum: [queued] } } } } } }
         "400": { $ref: "#/components/responses/Problem" }
-        "403": { description: Template not approved, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "403": { description: Template not approved, or no bound / unauthorized engagement, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { description: Campaign not in 'scheduled', content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "409": { description: Campaign not in 'scheduled', or the bound engagement is expired/terminated, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
   /campaigns/{id}/targets:
     get:
@@ -370,6 +395,115 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /engagements:
+    post:
+      operationId: createEngagement
+      summary: Create an engagement (operator) — starts in 'draft'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EngagementInput" }
+            example: { name: "Q1 Acme Test", client_name: "Acme Inc", authorized_scope: ["*.acme.com", "https://acme.com"], expires_at: "2026-12-31T23:59:59Z" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Engagement" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { description: Name already exists for the tenant, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+    get:
+      operationId: listEngagements
+      summary: List the caller's tenant engagements, newest first (operator)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Engagement" } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /engagements/{id}:
+    get:
+      operationId: getEngagement
+      summary: Get an engagement in the caller's tenant (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Engagement" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: patchEngagement
+      summary: Edit an engagement (operator) — draft/pending/authorized only
+      description: Editing a terminated engagement is 409. name and client_name are required.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EngagementInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Engagement" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Terminated engagement cannot be edited, or name clash, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /engagements/{id}/request-authorization:
+    post:
+      operationId: requestEngagementAuthorization
+      summary: Request authorization (operator) — draft|pending -> pending_authorization
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Engagement" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Not allowed from the current status, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /engagements/{id}/authorize:
+    post:
+      operationId: authorizeEngagement
+      summary: Authorize an engagement (ADMIN) — pending_authorization -> authorized
+      description: >
+        Admin-only (self-authorization is impossible — the operator cannot reach
+        this route). Sets authorized_at and authorized_by.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Engagement" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Not in 'pending_authorization', content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /engagements/{id}/terminate:
+    post:
+      operationId: terminateEngagement
+      summary: Terminate an engagement — emergency stop (ADMIN)
+      description: Admin-only. Any non-terminal engagement -> terminated (terminal; no re-authorization).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Engagement" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Already terminated, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
   /activity:
     get:
@@ -820,7 +954,7 @@ paths:
     get:
       operationId: listApprovals
       summary: List approvals (operator)
-      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Approval" } } } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Approval" } } } } } } } }
   /approvals/{id}/approve:
     post:
       operationId: approveApproval
@@ -1107,7 +1241,7 @@ paths:
                     occurred_at: { type: string, format: date-time }
                     payload: { type: object }
       responses:
-        "200": {accepted, results[]}
+        "200": { description: "Accepted; per-event results", content: { application/json: { schema: { type: object, properties: { accepted: { type: integer }, results: { type: array, items: { type: object } } } } } } }
         "202": { description: accepted }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
@@ -1185,9 +1319,69 @@ components:
         name:        { type: string }
         status:      { $ref: "#/components/schemas/CampaignStatus" }
         landing_url: { type: string, nullable: true }
+        template_id:         { type: string, format: uuid, nullable: true }
+        sending_profile_id:  { type: string, format: uuid, nullable: true }
+        engine_id:           { type: string, format: uuid, nullable: true }
+        engagement_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The authorizing engagement this campaign is bound to, if any.
+        engagement_status:
+          type: string
+          nullable: true
+          description: >
+            Derived effective status label of the bound engagement
+            (active/authorized/expired/terminated/draft/pending_authorization),
+            populated on list/detail reads when an engagement is bound.
         created_by:  { type: string, format: uuid }
         created_at:  { type: string, format: date-time }
         updated_at:  { type: string, format: date-time }
+    EngagementStatus:
+      type: string
+      description: >
+        Stored lifecycle status. 'active' and 'expired' are DERIVED labels
+        (see effective_status) and are not stored; stored values are draft,
+        pending_authorization, authorized, terminated.
+      enum: [draft, pending_authorization, authorized, active, expired, terminated]
+    EngagementInput:
+      type: object
+      required: [name, client_name]
+      description: Create/patch body for an engagement.
+      properties:
+        name:             { type: string, description: Unique per tenant. }
+        client_name:      { type: string }
+        roe_reference:    { type: string, nullable: true, description: Rules-of-Engagement document id/URL. }
+        authorized_scope:
+          type: array
+          description: Authorized URL/domain scope (stored as data; validated as URLs or bare/wildcard domains).
+          items: { type: string }
+        starts_at:  { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        notes:      { type: string, nullable: true }
+    Engagement:
+      type: object
+      description: >
+        The authorization container for campaigns. A campaign must be bound to an
+        authorized, unexpired, non-terminated engagement before launch or send.
+      properties:
+        id:               { type: string, format: uuid }
+        tenant_id:        { type: string, format: uuid }
+        name:             { type: string }
+        client_name:      { type: string }
+        status:           { $ref: "#/components/schemas/EngagementStatus" }
+        effective_status:
+          { $ref: "#/components/schemas/EngagementStatus" }
+        roe_reference:    { type: string, nullable: true }
+        authorized_scope: { type: array, items: { type: string } }
+        authorized_at:    { type: string, format: date-time, nullable: true }
+        authorized_by:    { type: string, format: uuid, nullable: true }
+        starts_at:        { type: string, format: date-time, nullable: true }
+        expires_at:       { type: string, format: date-time, nullable: true }
+        notes:            { type: string, nullable: true }
+        created_by:       { type: string, format: uuid }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
     ReportTotals:
       type: object
       description: >
@@ -1317,7 +1511,7 @@ components:
       type: object
       required: [name]
       properties:
-        name:        { type: string, description: identifier [A-Za-z_][A-Za-z0-9_]* }
+        name:        { type: string, description: "identifier [A-Za-z_][A-Za-z0-9_]*" }
         example:     { type: string }
         description: { type: string }
     PromptTemplateInput:

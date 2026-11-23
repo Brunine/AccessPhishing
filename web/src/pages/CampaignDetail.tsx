@@ -29,7 +29,16 @@ export default function CampaignDetail() {
       <PageHeader
         title={c.name}
         subtitle={`Campaign ${c.id}`}
-        actions={<Badge value={c.status} />}
+        actions={
+          <div className="flex items-center gap-2">
+            {c.engagement_status && (
+              <span className="text-xs text-slate-500">
+                engagement <Badge value={c.engagement_status} />
+              </span>
+            )}
+            <Badge value={c.status} />
+          </div>
+        }
       />
       <Link to="/campaigns" className="mb-4 inline-block text-sm text-slate-400 hover:text-slate-200">
         ← All campaigns
@@ -54,10 +63,12 @@ function LaunchForm({
   const groups = useAsync(() => api.groups.list());
   const templates = useAsync(() => api.templates.list());
   const profiles = useAsync(() => api.profiles.list());
+  const engagements = useAsync(() => api.engagements.list());
 
   const [groupId, setGroupId] = useState("");
   const [templateId, setTemplateId] = useState("");
   const [profileId, setProfileId] = useState("");
+  const [engagementId, setEngagementId] = useState(campaign.engagement_id ?? "");
   const [landing, setLanding] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -67,6 +78,11 @@ function LaunchForm({
     setErr(null);
     setBusy(true);
     try {
+      // Bind the chosen engagement first if it changed (draft-only); launch
+      // then enforces that it is authorized and unexpired.
+      if (engagementId && engagementId !== campaign.engagement_id) {
+        await api.campaigns.patch(campaign.id, { engagement_id: engagementId });
+      }
       await api.campaigns.launch(campaign.id, {
         group_id: groupId || undefined,
         template_id: templateId || undefined,
@@ -90,6 +106,25 @@ function LaunchForm({
         <span className="text-amber-200"> scheduled</span>.
       </p>
       <ErrorBanner error={err} />
+
+      <Field
+        label="Engagement"
+        hint="Required before launch — must be authorized and unexpired. Create/authorize on the Engagements page."
+      >
+        <select
+          className="input"
+          value={engagementId}
+          onChange={(e) => setEngagementId(e.target.value)}
+          required
+        >
+          <option value="">Select an engagement…</option>
+          {(engagements.data ?? []).map((en) => (
+            <option key={en.id} value={en.id}>
+              {en.name} — {en.client_name} [{en.effective_status}]
+            </option>
+          ))}
+        </select>
+      </Field>
 
       <Field label="Target group">
         <select className="input" value={groupId} onChange={(e) => setGroupId(e.target.value)} required>
@@ -130,7 +165,7 @@ function LaunchForm({
         <input className="input" value={landing} onChange={(e) => setLanding(e.target.value)} placeholder="https://portal.example.test/login" />
       </Field>
 
-      <button className="btn-primary" disabled={busy || !groupId}>
+      <button className="btn-primary" disabled={busy || !groupId || !engagementId}>
         {busy ? "Launching…" : "Launch"}
       </button>
     </form>
@@ -309,6 +344,14 @@ function LaunchedView({ campaign }: { campaign: Campaign }) {
             Approval:{" "}
             {templateApproval ? (
               <Badge value={templateApproval.status} />
+            ) : (
+              <span className="text-slate-500">none</span>
+            )}
+          </span>
+          <span className="text-slate-400">
+            Engagement:{" "}
+            {campaign.engagement_status ? (
+              <Badge value={campaign.engagement_status} />
             ) : (
               <span className="text-slate-500">none</span>
             )}

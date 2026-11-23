@@ -519,6 +519,11 @@ func (s *Server) sendCampaign(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusConflict, "conflict", "campaign must be 'scheduled' to send")
 		return
 	}
+	// Engagement authorization gate: re-check at send time — the engagement may
+	// have expired or been terminated (emergency stop) since launch.
+	if !s.checkEngagementGate(w, r, s.pool, p.TenantID, camp) {
+		return
+	}
 	if camp.TemplateID == nil {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "campaign has no template assigned")
 		return

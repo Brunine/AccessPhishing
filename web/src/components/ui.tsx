@@ -88,6 +88,12 @@ const STATE_STYLES: Record<string, string> = {
   failed: "bg-rose-950/70 text-rose-300",
   approved: "bg-emerald-900/60 text-emerald-200",
   rejected: "bg-rose-900/60 text-rose-200",
+  // engagement statuses
+  pending_authorization: "bg-amber-900/60 text-amber-200",
+  authorized: "bg-emerald-900/60 text-emerald-200",
+  active: "bg-emerald-900/60 text-emerald-200",
+  expired: "bg-orange-900/60 text-orange-200",
+  terminated: "bg-rose-950/70 text-rose-300",
 };
 
 export function Badge({ value }: { value: string }) {

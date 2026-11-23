@@ -76,8 +76,9 @@ func TestCampaignSend(t *testing.T) {
 		do(t, srv.URL, http.MethodPost, "/api/v1/contacts", opTok, map[string]any{"email": e, "first_name": "X", "group_id": grp.ID})
 	}
 
-	// campaign + launch with template & profile
-	_, body = do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Send Drill"})
+	// campaign (bound to an authorized engagement) + launch with template & profile
+	engID := seedAuthorizedEngagement(t, ctx, pool, tn.ID, opID)
+	_, body = do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Send Drill", "engagement_id": engID})
 	var camp struct {
 		ID uuid.UUID `json:"id"`
 	}

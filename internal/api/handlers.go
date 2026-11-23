@@ -95,7 +95,8 @@ func (s *Server) getTenant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name string `json:"name"`
+		Name         string     `json:"name"`
+		EngagementID *uuid.UUID `json:"engagement_id"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -106,6 +107,15 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	p, _ := auth.FromContext(r.Context())
 
+	// A bound engagement_id must reference a same-tenant engagement (following
+	// the group_id precedent). We never trust the id from the body without this.
+	if in.EngagementID != nil {
+		if _, err := s.engagements.GetByID(r.Context(), s.pool, p.TenantID, *in.EngagementID); err != nil {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "engagement_id not found in tenant")
+			return
+		}
+	}
+
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "begin transaction")
@@ -113,15 +123,19 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
-	c, err := s.campaigns.Create(r.Context(), tx, p.TenantID, p.UserID, in.Name)
+	c, err := s.campaigns.Create(r.Context(), tx, p.TenantID, p.UserID, in.Name, in.EngagementID)
 	if err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "create campaign")
 		return
 	}
+	meta := map[string]any{"name": c.Name}
+	if in.EngagementID != nil {
+		meta["engagement_id"] = in.EngagementID.String()
+	}
 	if err := audit.Write(r.Context(), tx, audit.Entry{
 		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
 		Action: "campaign.create", TargetType: "campaign", TargetID: c.ID.String(),
-		Metadata: map[string]any{"name": c.Name},
+		Metadata: meta,
 	}); err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "audit write")
 		return
@@ -162,14 +176,23 @@ func (s *Server) getCampaign(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, c)
 }
 
-func (s *Server) patchCampaignStatus(w http.ResponseWriter, r *http.Request) {
+// patchCampaign updates a campaign's status and/or its bound engagement. Both
+// fields are optional; at least one must be present. Rebinding an engagement is
+// only allowed while the campaign is still a draft (after launch it is 409, to
+// keep the authorization audit trail stable).
+func (s *Server) patchCampaign(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Status string `json:"status"`
+		Status       *string    `json:"status"`
+		EngagementID *uuid.UUID `json:"engagement_id"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	if !campaign.ValidStatus(in.Status) {
+	if in.Status == nil && in.EngagementID == nil {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "provide status and/or engagement_id")
+		return
+	}
+	if in.Status != nil && !campaign.ValidStatus(*in.Status) {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "invalid campaign status")
 		return
 	}
@@ -186,25 +209,57 @@ func (s *Server) patchCampaignStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
-	if err := s.campaigns.UpdateStatus(r.Context(), tx, p.TenantID, id, in.Status); err != nil {
-		if errors.Is(err, campaign.ErrNotFound) {
-			httpx.Problem(w, r, http.StatusNotFound, "not found", "campaign not found")
-			return
-		}
-		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "update status")
+	camp, err := s.campaigns.GetByID(r.Context(), tx, p.TenantID, id)
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.Problem(w, r, http.StatusNotFound, "not found", "campaign not found")
 		return
 	}
+	if err != nil {
+		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "load campaign")
+		return
+	}
+
+	if in.EngagementID != nil {
+		if _, err := s.engagements.GetByID(r.Context(), tx, p.TenantID, *in.EngagementID); err != nil {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "engagement_id not found in tenant")
+			return
+		}
+		if camp.Status != "draft" {
+			httpx.Problem(w, r, http.StatusConflict, "conflict", "cannot change the engagement after launch")
+			return
+		}
+		if err := s.campaigns.SetEngagement(r.Context(), tx, p.TenantID, id, in.EngagementID); err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "bind engagement")
+			return
+		}
+		if err := audit.Write(r.Context(), tx, audit.Entry{
+			TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
+			Action: "campaign.engagement.bind", TargetType: "campaign", TargetID: id.String(),
+			Metadata: map[string]any{"engagement_id": in.EngagementID.String()},
+		}); err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "audit write")
+			return
+		}
+	}
+
+	if in.Status != nil {
+		if err := s.campaigns.UpdateStatus(r.Context(), tx, p.TenantID, id, *in.Status); err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "update status")
+			return
+		}
+		if err := audit.Write(r.Context(), tx, audit.Entry{
+			TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
+			Action: "campaign.status.update", TargetType: "campaign", TargetID: id.String(),
+			Metadata: map[string]any{"status": *in.Status},
+		}); err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "audit write")
+			return
+		}
+	}
+
 	c, err := s.campaigns.GetByID(r.Context(), tx, p.TenantID, id)
 	if err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "reload campaign")
-		return
-	}
-	if err := audit.Write(r.Context(), tx, audit.Entry{
-		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
-		Action: "campaign.status.update", TargetType: "campaign", TargetID: id.String(),
-		Metadata: map[string]any{"status": in.Status},
-	}); err != nil {
-		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "audit write")
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {

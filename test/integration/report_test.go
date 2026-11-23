@@ -51,7 +51,8 @@ func TestCampaignReport(t *testing.T) {
 	}
 
 	// campaign + launch (snapshots 3 recipients)
-	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Report Drill"})
+	engID := seedAuthorizedEngagement(t, ctx, pool, tn.ID, opID)
+	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Report Drill", "engagement_id": engID})
 	var camp struct {
 		ID uuid.UUID `json:"id"`
 	}
