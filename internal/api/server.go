@@ -18,6 +18,7 @@ import (
 	"phishforge/internal/campaign"
 	"phishforge/internal/contact"
 	"phishforge/internal/crypto"
+	"phishforge/internal/engagement"
 	"phishforge/internal/engine"
 	"phishforge/internal/enginerepo"
 	"phishforge/internal/events"
@@ -79,6 +80,7 @@ type Server struct {
 	prompttpls   *prompttpl.Repository
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
+	engagements  *engagement.Repository
 	contacts     *contact.Repository
 	groups       *group.Repository
 	suppressions *suppression.Repository
@@ -108,6 +110,7 @@ func NewServer(d Deps) *Server {
 		prompttpls:   prompttpl.NewRepository(),
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
+		engagements:  engagement.NewRepository(),
 		contacts:     contact.NewRepository(),
 		groups:       group.NewRepository(),
 		suppressions: suppression.NewRepository(),
@@ -158,7 +161,7 @@ func (s *Server) Router() http.Handler {
 				r.Post("/", s.createCampaign)
 				r.Get("/", s.listCampaigns)
 				r.Get("/{id}", s.getCampaign)
-				r.Patch("/{id}", s.patchCampaignStatus)
+				r.Patch("/{id}", s.patchCampaign)
 				r.Post("/{id}/launch", s.launchCampaign)
 				r.Get("/{id}/links", s.campaignLinks)
 				r.Get("/{id}/targets", s.campaignTargets)
@@ -169,6 +172,21 @@ func (s *Server) Router() http.Handler {
 				r.Get("/{id}/report", s.campaignReport)
 				r.Get("/{id}/report.csv", s.campaignReportCSV)
 				r.Get("/{id}/report.pdf", s.campaignReportPDF)
+			})
+
+			// M8a engagements: the authorization container for campaigns. List/
+			// create/get/patch + request-authorization are operator; authorize and
+			// terminate require admin (self-authorization is impossible — the
+			// operator cannot reach the authorize route). Roles are per-route so
+			// the two admin actions coexist with the operator CRUD under one mount.
+			r.Route("/engagements", func(r chi.Router) {
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/", s.listEngagements)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/", s.createEngagement)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}", s.getEngagement)
+				r.With(auth.RequireRole(auth.RoleOperator)).Patch("/{id}", s.patchEngagement)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/request-authorization", s.requestEngagementAuthorization)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/authorize", s.authorizeEngagement)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/terminate", s.terminateEngagement)
 			})
 
 			// Dashboard activity feed: recent audit entries + events (operator).

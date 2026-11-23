@@ -88,6 +88,14 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Engagement authorization gate (order: engagement -> SMS phone -> snapshot).
+	// Refuse an unauthorized/expired/terminated or unbound engagement BEFORE
+	// resolving recipient data, so recipient details are never touched for a
+	// campaign that is not authorized to run.
+	if !s.checkEngagementGate(w, r, tx, p.TenantID, camp) {
+		return
+	}
+
 	// Resolve the selected contacts within the tenant, skipping suppressed
 	// addresses (the do-not-contact list is honored at launch).
 	targets, err := s.resolveTargets(r, tx, p.TenantID, b.GroupID, b.ContactIDs)

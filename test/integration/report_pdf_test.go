@@ -44,7 +44,8 @@ func TestReportPDF(t *testing.T) {
 		mustJSON(t, cb, &c)
 		ids[e] = c.ID
 	}
-	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "PDF Drill"})
+	engID := seedAuthorizedEngagement(t, ctx, pool, tn.ID, opID)
+	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "PDF Drill", "engagement_id": engID})
 	var camp struct {
 		ID uuid.UUID `json:"id"`
 	}

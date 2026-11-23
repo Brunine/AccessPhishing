@@ -75,7 +75,8 @@ cascade on tenant delete. Migrations live in `migrations/` (`0001`…`0013`).
 | `tenant_policies` | per-tenant settings (e.g. capture policy) | → tenant |
 | `contact_groups`, `contacts` | targets and groupings (JSONB attributes) | → tenant, group |
 | `suppression_lists` | do-not-contact addresses, honored at launch | → tenant |
-| `campaigns` | campaign lifecycle + template/profile/engine refs | → tenant, template, sending_profile, engine |
+| `campaigns` | campaign lifecycle + template/profile/engine/engagement refs | → tenant, template, sending_profile, engine, engagement |
+| `engagements` | authorization container: client, RoE ref, authorized scope, authorization workflow + expiry + emergency stop | → tenant, authorizing user |
 | `recipients` | per-campaign snapshot + tracking token | → campaign, contact |
 | `campaign_targets` | projected current state per (campaign, contact) | → campaign, contact |
 | `events` | append-only victim-state history (append-only trigger) | → tenant, campaign, contact |
@@ -99,6 +100,15 @@ operators may request them. The send path checks `IsApproved(template)` and
 returns `403` otherwise; LLM drafts can only be **promoted** into real templates
 once their `llm_draft` subject is approved. This keeps a human in the loop on
 every outbound artifact — the platform never auto-sends.
+
+This content-approval gate is distinct from **engagement authorization**: the
+approval gate certifies *what* is sent (a template/draft is reviewed), while an
+engagement (M8a) certifies *that the campaign is authorized to run at all*
+against a client — a campaign must be bound to an authorized, unexpired,
+non-terminated `engagement` (operator requests → admin authorizes; admin can
+terminate as an emergency stop) before launch or send. Launch/send enforce this
+in the application (`campaigns.engagement_id → engagements`): unbound/
+unauthorized → `403`, expired/terminated → `409`.
 
 ## Audit trail
 

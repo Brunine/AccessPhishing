@@ -90,7 +90,8 @@ func TestDeliveryChannelsAndBounce(t *testing.T) {
 	}
 
 	// --- campaign 1: graph send without network config -> graceful failure ---
-	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Graph Drill"})
+	engID := seedAuthorizedEngagement(t, ctx, pool, tn.ID, opID)
+	_, cb := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Graph Drill", "engagement_id": engID})
 	var camp1 struct {
 		ID uuid.UUID `json:"id"`
 	}
@@ -116,7 +117,7 @@ func TestDeliveryChannelsAndBounce(t *testing.T) {
 	}
 
 	// --- campaign 2: bounce ingest (fresh recipients, pending) ---
-	_, cb2 := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Bounce Drill"})
+	_, cb2 := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Bounce Drill", "engagement_id": engID})
 	var camp2 struct {
 		ID uuid.UUID `json:"id"`
 	}

@@ -14,7 +14,9 @@ import {
 
 export default function Campaigns() {
   const { data, loading, error, reload } = useAsync(() => api.campaigns.list());
+  const engagements = useAsync(() => api.engagements.list());
   const [name, setName] = useState("");
+  const [engagementId, setEngagementId] = useState("");
   const [busy, setBusy] = useState(false);
   const [formErr, setFormErr] = useState<unknown>(null);
 
@@ -23,8 +25,12 @@ export default function Campaigns() {
     setFormErr(null);
     setBusy(true);
     try {
-      await api.campaigns.create({ name });
+      await api.campaigns.create({
+        name,
+        engagement_id: engagementId || undefined,
+      });
       setName("");
+      setEngagementId("");
       reload();
     } catch (e) {
       setFormErr(e);
@@ -40,13 +46,26 @@ export default function Campaigns() {
         subtitle="Create a campaign, then open it to launch, approve, and send."
       />
 
-      <form onSubmit={create} className="card mb-6 flex gap-2">
+      <form onSubmit={create} className="card mb-6 flex flex-wrap gap-2">
         <input
-          className="input"
+          className="input flex-1"
           placeholder="New campaign name"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        <select
+          className="input w-full sm:w-72"
+          value={engagementId}
+          onChange={(e) => setEngagementId(e.target.value)}
+          title="Authorizing engagement (required before the campaign can launch)"
+        >
+          <option value="">Engagement (optional now, required to launch)…</option>
+          {(engagements.data ?? []).map((en) => (
+            <option key={en.id} value={en.id}>
+              {en.name} — {en.client_name} [{en.effective_status}]
+            </option>
+          ))}
+        </select>
         <button className="btn-primary" disabled={busy || !name}>
           {busy ? "Creating…" : "Create"}
         </button>

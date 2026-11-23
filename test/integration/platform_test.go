@@ -15,7 +15,7 @@ import (
 
 // seedFunnel creates a group + 2 contacts + a launched campaign for a tenant
 // (driven over HTTP with tok) and drives one contact through sent->clicked.
-func seedFunnel(t *testing.T, ctx context.Context, srvURL, tok string, er *events.Repository, tenantID uuid.UUID) uuid.UUID {
+func seedFunnel(t *testing.T, ctx context.Context, srvURL, tok string, er *events.Repository, tenantID, engagementID uuid.UUID) uuid.UUID {
 	t.Helper()
 	_, gb := do(t, srvURL, http.MethodPost, "/api/v1/contact-groups", tok, map[string]any{"name": "wave"})
 	var grp struct {
@@ -33,7 +33,7 @@ func seedFunnel(t *testing.T, ctx context.Context, srvURL, tok string, er *event
 			first = c.ID
 		}
 	}
-	_, cb := do(t, srvURL, http.MethodPost, "/api/v1/campaigns", tok, map[string]any{"name": "Drill"})
+	_, cb := do(t, srvURL, http.MethodPost, "/api/v1/campaigns", tok, map[string]any{"name": "Drill", "engagement_id": engagementID})
 	var camp struct {
 		ID uuid.UUID `json:"id"`
 	}
@@ -69,8 +69,10 @@ func TestPlatformConsole(t *testing.T) {
 	srv, _ := newAPI(t, pool)
 	defer srv.Close()
 
-	seedFunnel(t, ctx, srv.URL, aOpTok, er, tnA.ID)
-	seedFunnel(t, ctx, srv.URL, bAdminTok, er, tnB.ID)
+	engA := seedAuthorizedEngagement(t, ctx, pool, tnA.ID, aOp)
+	engB := seedAuthorizedEngagement(t, ctx, pool, tnB.ID, bAdmin)
+	seedFunnel(t, ctx, srv.URL, aOpTok, er, tnA.ID, engA)
+	seedFunnel(t, ctx, srv.URL, bAdminTok, er, tnB.ID, engB)
 
 	// Platform overview (A's admin sees ALL tenants with KPIs).
 	code, body := do(t, srv.URL, http.MethodGet, "/api/v1/platform/tenants", aAdminTok, nil)

@@ -65,6 +65,75 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M8a — engagements as the authorization container for campaigns.
+  COMPLETE. Scope chosen: a full engagement lifecycle (operator requests ->
+  admin authorizes) with an emergency-stop (terminate), plus a server-side gate
+  that blocks launch/send unless the campaign is bound to an authorized,
+  unexpired, non-terminated engagement.
+- BEHAVIOR CHANGE (intentional, documented): a campaign can no longer be
+  launched or sent without a bound, authorized, unexpired engagement. Launch/
+  send return 403 when unbound/unauthorized, 409 when expired/terminated.
+  Campaigns created before migration 0015 have engagement_id NULL and must be
+  bound (POST/PATCH /campaigns with engagement_id) before they can run — this
+  required seeding engagements in the existing launch/send integration tests
+  (listed below).
+- Done (M8a engagements):
+  - Migration 0015 (NOT 0014 — SMS took 0014): engagement_status enum
+    (draft|pending_authorization|authorized|active|expired|terminated),
+    engagements table (tenant-scoped, UNIQUE(tenant,name), authorized_scope
+    jsonb, authorized_at/by, starts_at/expires_at, notes, set_updated_at
+    trigger), campaigns.engagement_id UUID FK ON DELETE SET NULL + index.
+    .down.sql drops the column/index, table, and enum cleanly. 'active' and
+    'expired' are DERIVED (never stored); stored values are draft/pending/
+    authorized/terminated.
+  - internal/engagement: domain (Status, IsActive(now), IsExpired, Effective
+    label, CheckCampaignLaunchable -> ErrEngagementNotAuthorized/Expired/
+    Terminated sentinels, Can{RequestAuthorization,Authorize,Terminate,Edit}
+    guards, ValidateScope for URL/wildcard-domain entries) + stateless
+    tenant-scoped repo (Create/GetByID/List/Update/RequestAuthorization/
+    Authorize/Terminate). Unit tests (no DB) cover transitions, IsActive/
+    Effective incl. expiry boundary, launchable sentinels, scope validation.
+  - HTTP (tenant-scoped, audited) /engagements: GET list, POST create, GET
+    {id}, PATCH {id} (draft/pending/authorized editable; terminated -> 409),
+    POST {id}/request-authorization (operator; draft|pending -> pending),
+    POST {id}/authorize (ADMIN only; pending -> authorized, sets authorized_
+    at/by), POST {id}/terminate (ADMIN only; any non-terminal -> terminated).
+    Per-route roles so admin actions coexist with operator CRUD under one mount
+    (self-authorization impossible — operator cannot reach authorize/terminate).
+    Lifecycle transitions audited with {from,to} status
+    (engagement.create/update/request_authorization/authorize/terminate).
+  - Campaign binding: campaigns Create gained engagement_id; POST /campaigns
+    and PATCH /campaigns/{id} accept an optional engagement_id (same-tenant or
+    400; rebinding allowed only while draft, else 409). GetByID/ListByTenant
+    LEFT JOIN engagements to return engagement_id + a derived engagement_status
+    label (no N+1). Launch gate order: engagement -> SMS phone -> snapshot
+    (refuse unauthorized before touching recipient data). Send re-checks the
+    gate (engagement may expire/terminate between launch and send).
+  - OpenAPI 0.10.0: /engagements paths + Engagement/EngagementInput/
+    EngagementStatus schemas; engagement_id on campaign create + PATCH;
+    engagement_id/engagement_status on Campaign; launch/send 403/409 documented.
+    (Also fixed 3 PRE-EXISTING malformed-YAML lines that made the whole spec
+    unparseable — listApprovals missing brace, engine-events {accepted,
+    results[]} placeholder, PromptVariable unquoted [A-Za-z_] description.)
+  - web/: new "Engagements" nav page (create form name/client/scope-lines/
+    expires-at/RoE; table with effective-status pill, authorized/expires dates;
+    per-row Request-auth [operator] / Authorize + Terminate [admin-gated]
+    buttons with inline 403/409 banners). Campaign create form + launch form
+    gained an engagement selector; campaign detail header + config card show
+    the engagement status pill. npm run build clean (54 modules).
+  - Tests: internal/engagement unit tests; test/integration/engagements_test.go
+    (full lifecycle create->request->authorize->bind->launch->send 202;
+    operator authorize 403; authorize-from-draft 409; launch w/o engagement 403
+    + detail, pending 403, expired 409, terminated 409; rebind-after-launch
+    409; terminal no-reauth/no-edit 409; audit counts; tenant isolation 400/404/
+    empty-list). UPDATED existing launch/send suites to seed+bind an authorized
+    engagement: tracking_test, delivery_test, delivery_channels_test, sms_test
+    (both the missing-phone-400 and happy campaigns), report_test,
+    report_pdf_test, bounce_poller_test, platform_test (seedFunnel). Added a
+    seedAuthorizedEngagement helper to flow_test.go.
+  - Verification: go build/vet/test clean; full integration suite green
+    (incl. the 8 updated suites + new engagements_test); gofmt-clean (touched
+    files); web build clean; OpenAPI parses as valid YAML 0.10.0.
 - Milestone: M9a — SMS delivery (smishing) as a new sending-profile channel.
   COMPLETE. Extends the existing email channel pattern (channelSender +
   resolveSender dispatch); the email path was not refactored. M9b quishing,

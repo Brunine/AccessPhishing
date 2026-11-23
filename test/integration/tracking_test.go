@@ -47,7 +47,8 @@ func TestCampaignLaunchAndTracking(t *testing.T) {
 	}
 
 	// draft campaign
-	_, body = do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Phish Drill"})
+	engID := seedAuthorizedEngagement(t, ctx, pool, tn.ID, opID)
+	_, body = do(t, srv.URL, http.MethodPost, "/api/v1/campaigns", opTok, map[string]any{"name": "Phish Drill", "engagement_id": engID})
 	var camp struct {
 		ID uuid.UUID `json:"id"`
 	}

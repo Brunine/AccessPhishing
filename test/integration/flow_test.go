@@ -260,6 +260,22 @@ func createUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID 
 	return id
 }
 
+// seedAuthorizedEngagement inserts an already-authorized engagement directly
+// (bypassing the operator->admin workflow) so launch/send happy paths have a
+// valid authorization container to bind. createdBy must be an existing user.
+func seedAuthorizedEngagement(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID, createdBy uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO engagements (tenant_id, name, client_name, status, authorized_at, authorized_by, created_by)
+		 VALUES ($1, $2, $3, 'authorized', now(), $4, $4) RETURNING id`,
+		tenantID, "Engagement "+short(), "Client Co", createdBy).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed authorized engagement: %v", err)
+	}
+	return id
+}
+
 func createContact(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID, email string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID

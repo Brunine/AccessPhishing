@@ -54,9 +54,49 @@ export interface Campaign {
   landing_url?: string;
   template_id?: string;
   sending_profile_id?: string;
+  engine_id?: string;
+  engagement_id?: string;
+  engagement_status?: string;
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+export type EngagementStatus =
+  | "draft"
+  | "pending_authorization"
+  | "authorized"
+  | "active"
+  | "expired"
+  | "terminated";
+
+export interface Engagement {
+  id: string;
+  tenant_id: string;
+  name: string;
+  client_name: string;
+  status: EngagementStatus;
+  effective_status: EngagementStatus;
+  roe_reference?: string;
+  authorized_scope: string[];
+  authorized_at?: string;
+  authorized_by?: string;
+  starts_at?: string;
+  expires_at?: string;
+  notes?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EngagementInput {
+  name: string;
+  client_name: string;
+  roe_reference?: string | null;
+  authorized_scope?: string[];
+  starts_at?: string | null;
+  expires_at?: string | null;
+  notes?: string | null;
 }
 
 export interface Template {
