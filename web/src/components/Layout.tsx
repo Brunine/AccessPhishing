@@ -12,6 +12,7 @@ const NAV = [
   { to: "/approvals", label: "Approvals" },
   { to: "/recon", label: "Recon" },
   { to: "/activity", label: "Activity" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export function KeyGate() {

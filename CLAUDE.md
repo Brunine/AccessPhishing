@@ -63,6 +63,32 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: operator API key management.
+- Done (API key management):
+  - internal/apikey: added Record + List (never returns secret/hash), KeyID on
+    Identity (from the parsed token), and RevokeOperatorKey with the self-
+    lockout guard. Rule: revoking the key the request authenticated with is
+    refused (ErrLastOperatorKey) when no OTHER active operator-capable
+    (role admin/operator) key would remain for the tenant; check + revoke run
+    in one tx. Plain Revoke retained for seed/tests.
+  - auth.Principal gained KeyID; server identifier populates it from the key.
+  - HTTP (operator, tenant-scoped, audited) /api-keys: GET list, POST create
+    (returns the pf_... token exactly once; audited apikey.create by the
+    service), POST /{id}/revoke (self-lockout => 409, unknown/already-revoked
+    => 404; audited apikey.revoke). No new migration (api_keys columns already
+    exist since 0003).
+  - web/ Settings page (nav "Settings"): create form; a one-time token box with
+    a Copy button (dismissable); key table (name/created/last-used/status) with
+    Revoke behind window.confirm and inline 409 handling.
+  - OpenAPI 0.9.4 (/api-keys endpoints + APIKey schema).
+  - Tests: internal/apikey/apikey_test.go (parseToken valid/invalid forms, no
+    DB); test/integration/apikeys_test.go (list has no secret, create token
+    once + works, revoke non-current, self-lockout 409 on last operator key +
+    key still works, revoke current when another remains, revoked key -> 401,
+    unknown -> 404, audit counts create=3/revoke=2). npm run build clean (51
+    modules); go build/vet/test clean; full suite green; gofmt-clean.
+    (Docker Desktop had stopped over the gap; restarted postgres/redis to run
+    the integration suite.)
 - Milestone: web/ PDF download buttons.
 - Done (web PDF downloads):
   - client: generalized the CSV blob-download helper to downloadFile (reads the

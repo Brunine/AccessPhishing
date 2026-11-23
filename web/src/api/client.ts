@@ -4,11 +4,13 @@
 
 import type {
   Activity,
+  APIKey,
   Approval,
   Campaign,
   CampaignLink,
   CampaignReport,
   CampaignTarget,
+  CreatedAPIKey,
   Contact,
   Group,
   ImportResult,
@@ -273,6 +275,14 @@ export const api = {
 
   activity: (limit = 50) =>
     request<Activity>("GET", `/activity?limit=${limit}`),
+
+  apiKeys: {
+    list: () => request<ListResponse<APIKey>>("GET", "/api-keys").then(items),
+    create: (name: string) =>
+      request<CreatedAPIKey>("POST", "/api-keys", { name }),
+    revoke: (id: string) =>
+      request<{ status: string }>("POST", `/api-keys/${id}/revoke`),
+  },
 
   osint: {
     status: () => request<OSINTStatus>("GET", "/osint/status"),

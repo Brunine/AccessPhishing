@@ -57,6 +57,7 @@ type Principal struct {
 	TenantID uuid.UUID
 	Email    string
 	Role     Role
+	KeyID    uuid.UUID // the API key this request authenticated with (if any)
 }
 
 type ctxKey int

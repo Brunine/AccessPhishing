@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.9.3
+  version: 0.9.4
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -597,6 +597,54 @@ paths:
                   context:       { type: object, additionalProperties: { type: string } }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api-keys:
+    get:
+      operationId: listAPIKeys
+      summary: List the tenant's API keys (operator)
+      description: M1/0.9.4. Never returns secret material (no token/hash).
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/APIKey" } } } } } } }
+    post:
+      operationId: createAPIKey
+      summary: Create an API key; the plaintext token is returned exactly once (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Created — token shown once
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:         { type: string, format: uuid }
+                  name:       { type: string }
+                  created_at: { type: string, format: date-time }
+                  token:      { type: string, description: "pf_<id>.<secret>; returned once, never stored in plaintext" }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /api-keys/{id}/revoke:
+    post:
+      operationId: revokeAPIKey
+      summary: Revoke an API key (operator)
+      description: >
+        Self-lockout guard: revoking the key the request authenticated with is
+        refused (409) when it is the tenant's last active operator-capable
+        (admin/operator) key.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Revoked, content: { application/json: { schema: { type: object, properties: { id: { type: string, format: uuid }, status: { type: string, enum: [revoked] } } } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Would self-lockout, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
   /templates:
     post:
       operationId: createTemplate
@@ -1019,6 +1067,15 @@ components:
         status:     { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    APIKey:
+      type: object
+      description: An API key record; secret material (token/hash) is never returned.
+      properties:
+        id:           { type: string, format: uuid }
+        name:         { type: string }
+        created_at:   { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        revoked_at:   { type: string, format: date-time, nullable: true }
     Campaign:
       type: object
       properties:

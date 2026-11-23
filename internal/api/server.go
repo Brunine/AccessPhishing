@@ -202,6 +202,13 @@ func (s *Server) Router() http.Handler {
 				r.Post("/{id}/render", s.renderPromptTemplate)
 			})
 
+			// Operator self-service API key management (tenant-scoped).
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/api-keys", func(r chi.Router) {
+				r.Get("/", s.listAPIKeys)
+				r.Post("/", s.createAPIKey)
+				r.Post("/{id}/revoke", s.revokeAPIKey)
+			})
+
 			// M3 delivery: templates, sending profiles, approvals (operator).
 			r.With(auth.RequireRole(auth.RoleOperator)).Route("/templates", func(r chi.Router) {
 				r.Post("/", s.createTemplate)
@@ -293,6 +300,7 @@ func (s *Server) identifier() auth.Identifier {
 			TenantID: id.TenantID,
 			Email:    id.Email,
 			Role:     auth.Role(id.Role),
+			KeyID:    id.KeyID,
 		}, nil
 	}
 }

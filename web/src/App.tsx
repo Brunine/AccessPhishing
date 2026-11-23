@@ -12,6 +12,7 @@ import SendingProfiles from "./pages/SendingProfiles";
 import Approvals from "./pages/Approvals";
 import Activity from "./pages/Activity";
 import Recon from "./pages/Recon";
+import Settings from "./pages/Settings";
 
 export default function App() {
   const { key, ready, isAdmin } = useSession();
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/recon" element={<Recon />} />
+        <Route path="/settings" element={<Settings />} />
         <Route
           path="/tenants"
           element={isAdmin ? <Tenants /> : <Navigate to="/campaigns" replace />}

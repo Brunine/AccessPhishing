@@ -31,10 +31,24 @@ var ErrInvalidKey = errors.New("apikey: invalid or revoked key")
 
 // Identity is the principal data bound to a verified key.
 type Identity struct {
+	KeyID    uuid.UUID
 	TenantID uuid.UUID
 	UserID   uuid.UUID
 	Email    string
 	Role     string
+}
+
+// ErrLastOperatorKey is returned when revoking a key would leave the tenant with
+// no active operator-capable (admin/operator) key — the self-lockout guard.
+var ErrLastOperatorKey = errors.New("apikey: cannot revoke the last active operator key")
+
+// Record is a listable key row (no secret material).
+type Record struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 }
 
 // Key is a stored key record (without secret material).
@@ -141,7 +155,79 @@ WHERE k.id = $1`
 
 	_, _ = s.pool.Exec(ctx, `UPDATE api_keys SET last_used_at = now() WHERE id = $1`, id)
 
-	return Identity{TenantID: tenantID, UserID: userID, Email: email, Role: role}, nil
+	return Identity{KeyID: id, TenantID: tenantID, UserID: userID, Email: email, Role: role}, nil
+}
+
+// List returns a tenant's API keys (no secret material), newest first.
+func (s *Service) List(ctx context.Context, tenantID uuid.UUID) ([]Record, error) {
+	const q = `SELECT id, name, created_at, last_used_at, revoked_at
+	           FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`
+	rows, err := s.pool.Query(ctx, q, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("apikey: list: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Record, 0)
+	for rows.Next() {
+		var r Record
+		if err := rows.Scan(&r.ID, &r.Name, &r.CreatedAt, &r.LastUsedAt, &r.RevokedAt); err != nil {
+			return nil, fmt.Errorf("apikey: scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("apikey: iterate: %w", err)
+	}
+	return out, nil
+}
+
+// RevokeOperatorKey revokes a tenant's key with a self-lockout guard: when
+// isCurrent is true (the caller is revoking the key they authenticated with),
+// the revoke is refused with ErrLastOperatorKey if no OTHER active operator-
+// capable (admin/operator) key would remain for the tenant. The check and the
+// revoke run in one transaction. Returns ErrInvalidKey if the key does not
+// exist / is already revoked.
+func (s *Service) RevokeOperatorKey(ctx context.Context, tenantID, actorID, id uuid.UUID, isCurrent bool) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("apikey: begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if isCurrent {
+		var others int
+		const cq = `
+SELECT count(*) FROM api_keys k
+JOIN users u ON u.id = k.user_id
+WHERE k.tenant_id = $1 AND k.revoked_at IS NULL AND k.id <> $2
+  AND u.role IN ('operator', 'admin')`
+		if err := tx.QueryRow(ctx, cq, tenantID, id).Scan(&others); err != nil {
+			return fmt.Errorf("apikey: count active: %w", err)
+		}
+		if others == 0 {
+			return ErrLastOperatorKey
+		}
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE api_keys SET revoked_at = now() WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL`,
+		tenantID, id)
+	if err != nil {
+		return fmt.Errorf("apikey: revoke: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInvalidKey
+	}
+	if err := audit.Write(ctx, tx, audit.Entry{
+		TenantID:   tenantID,
+		ActorID:    actorID,
+		Action:     "apikey.revoke",
+		TargetType: "api_key",
+		TargetID:   id.String(),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // Revoke marks a tenant's key revoked and writes an audit entry.

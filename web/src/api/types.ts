@@ -239,6 +239,21 @@ export interface OSINTStatus {
   service: "ok" | "down";
 }
 
+export interface APIKey {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at?: string;
+  revoked_at?: string;
+}
+
+export interface CreatedAPIKey {
+  id: string;
+  name: string;
+  created_at: string;
+  token: string;
+}
+
 export interface ListResponse<T> {
   items: T[];
   limit?: number;
