@@ -65,7 +65,9 @@ export function KeyGate() {
 
 export function Layout({ children }: { children: ReactNode }) {
   const { role, isAdmin, signOut } = useSession();
-  const nav = isAdmin ? [{ to: "/tenants", label: "Tenants" }, ...NAV] : NAV;
+  const nav = isAdmin
+    ? [{ to: "/platform", label: "Platform" }, { to: "/tenants", label: "Tenants" }, ...NAV]
+    : NAV;
 
   return (
     <div className="min-h-screen">

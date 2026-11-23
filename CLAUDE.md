@@ -48,9 +48,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
       validation, dry-run render, and generate-by-template)
 - [~] M7 OSINT (services/osint-py FastAPI + Go orchestrator client/endpoints
       (internal/osintclient, /api/v1/osint/*) done; amass still TODO)
-- [~] M8 Dashboard (web/ operator console + reporting/KPI aggregation +
-      dashboard charts + executive PDF export done; multi-tenant portals still
-      TODO)
+- [x] M8 Dashboard (web/ operator console + reporting/KPI aggregation +
+      dashboard charts + executive PDF export + platform-admin cross-tenant
+      console)
 - [ ] M9 Secondary vectors (SMS, QR, BitB injects, Asterisk vishing + local TTS)
 - [ ] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
 
@@ -63,6 +63,32 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M8 multi-tenant portals — platform-admin cross-tenant console
+  (M8 now fully done). Scope chosen by the user: a cross-tenant oversight
+  console (not a viewer customer portal / not tenant switching).
+- Decision: in this internal, self-hosted deployment the `admin` role is
+  platform-level — consistent with the existing admin-gated, cross-tenant
+  /tenants list/get. The new /platform/* endpoints extend that to read-only
+  cross-tenant KPI oversight. (A dedicated super-admin tier wasn't added; log in
+  docs/ADR.md if that's ever wanted.)
+- Done (platform console):
+  - internal/report.PlatformOverview: per-tenant headline rollup across ALL
+    tenants (two aggregate queries — state histogram per tenant + campaign
+    counts — merged in Go; reuses totalsFromHistogram; no N+1).
+  - HTTP (admin, audited) /platform: GET /tenants (all tenants + KPIs), GET
+    /tenants/{id}/summary (ANY tenant — cross-tenant, unlike the own-tenant
+    /tenants/{id}/summary), GET /tenants/{id}/summary.pdf (ANY tenant, reuses
+    pdfexport.TenantPDF). 404 unknown tenant; 403 for non-admin. Audited
+    platform.overview / platform.tenant_summary[.pdf].
+  - web/ (admin-only nav "Platform"): Platform.tsx (all-tenants table —
+    campaigns/recipients/clicked%/creds%, rows link in) + PlatformTenant.tsx
+    (aggregate RateBars + per-campaign table + Download executive summary PDF).
+    Routes admin-gated (redirect to /overview otherwise).
+  - OpenAPI 0.9.6 (/platform paths + PlatformTenant schema). Tests:
+    test/integration/platform_test.go (two seeded tenants; A's admin sees both
+    with correct KPIs; cross-tenant summary + PDF %PDF; operator 403; unknown
+    404; audit). go build/vet/test clean; web build clean (53 modules);
+    gofmt-clean.
 - Milestone: operator user management.
 - Done (user management):
   - internal/user: tenant-scoped repo. Create mirrors the seed tool

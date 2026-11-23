@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.9.5
+  version: 0.9.6
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -597,6 +597,40 @@ paths:
                   context:       { type: object, additionalProperties: { type: string } }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /platform/tenants:
+    get:
+      operationId: platformTenants
+      summary: Cross-tenant KPI overview (platform admin)
+      description: >
+        M8/0.9.6. Lists ALL tenants with headline KPI rollups. admin is
+        platform-level in this internal deployment (consistent with the existing
+        cross-tenant /tenants endpoints). Read-only; counts/rates only.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/PlatformTenant" } } } } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /platform/tenants/{id}/summary:
+    get:
+      operationId: platformTenantSummary
+      summary: Any tenant's KPI rollup (platform admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TenantSummary" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /platform/tenants/{id}/summary.pdf:
+    get:
+      operationId: platformTenantSummaryPDF
+      summary: Any tenant's executive PDF (platform admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: PDF, content: { application/pdf: { schema: { type: string, format: binary } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /users:
     get:
       operationId: listUsers
@@ -1109,6 +1143,16 @@ components:
         status:     { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    PlatformTenant:
+      type: object
+      description: One tenant's headline rollup for the cross-tenant console.
+      properties:
+        tenant_id: { type: string, format: uuid }
+        name:      { type: string }
+        slug:      { type: string }
+        campaigns: { type: integer }
+        totals:    { $ref: "#/components/schemas/ReportTotals" }
+        rates:     { $ref: "#/components/schemas/ReportRates" }
     User:
       type: object
       description: A key-based operator account (no password).

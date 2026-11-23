@@ -298,6 +298,102 @@ ORDER BY c.email`
 	return out, rows.Err()
 }
 
+// PlatformTenant is one tenant's headline rollup for the cross-tenant console.
+type PlatformTenant struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	Name      string    `json:"name"`
+	Slug      string    `json:"slug"`
+	Campaigns int       `json:"campaigns"`
+	Totals    Totals    `json:"totals"`
+	Rates     Rates     `json:"rates"`
+}
+
+// PlatformOverview builds a per-tenant headline rollup across ALL tenants (for
+// platform-admin oversight). Read-only; counts/rates only. Two aggregate
+// queries (state histogram per tenant + campaign counts), merged in Go — no
+// N+1 per tenant.
+func (r *Repository) PlatformOverview(ctx context.Context, q db.Querier) ([]PlatformTenant, error) {
+	const histSQL = `
+SELECT t.id, t.name, t.slug, t.created_at,
+       COALESCE(ct.state::text, 'pending') AS state, count(r.id) AS n
+FROM tenants t
+LEFT JOIN recipients r ON r.tenant_id = t.id
+LEFT JOIN campaign_targets ct
+       ON ct.campaign_id = r.campaign_id AND ct.contact_id = r.contact_id
+GROUP BY t.id, t.name, t.slug, t.created_at, state
+ORDER BY t.created_at DESC`
+	rows, err := q.Query(ctx, histSQL)
+	if err != nil {
+		return nil, fmt.Errorf("report: platform histogram: %w", err)
+	}
+	type acc struct {
+		name, slug string
+		hist       map[string]int
+	}
+	order := make([]uuid.UUID, 0)
+	byID := make(map[uuid.UUID]*acc)
+	for rows.Next() {
+		var (
+			id         uuid.UUID
+			name, slug string
+			created    time.Time
+			state      string
+			n          int
+		)
+		if err := rows.Scan(&id, &name, &slug, &created, &state, &n); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("report: platform scan: %w", err)
+		}
+		a, ok := byID[id]
+		if !ok {
+			a = &acc{name: name, slug: slug, hist: map[string]int{}}
+			byID[id] = a
+			order = append(order, id)
+		}
+		if n > 0 {
+			a.hist[state] += n
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("report: platform iterate: %w", err)
+	}
+
+	campaignCounts, err := r.campaignCountsByTenant(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]PlatformTenant, 0, len(order))
+	for _, id := range order {
+		a := byID[id]
+		totals, rates := totalsFromHistogram(a.hist)
+		out = append(out, PlatformTenant{
+			TenantID: id, Name: a.name, Slug: a.slug,
+			Campaigns: campaignCounts[id], Totals: totals, Rates: rates,
+		})
+	}
+	return out, nil
+}
+
+func (r *Repository) campaignCountsByTenant(ctx context.Context, q db.Querier) (map[uuid.UUID]int, error) {
+	rows, err := q.Query(ctx, `SELECT tenant_id, count(*) FROM campaigns GROUP BY tenant_id`)
+	if err != nil {
+		return nil, fmt.Errorf("report: campaign counts: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]int)
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("report: campaign counts scan: %w", err)
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // TenantSummary builds the portfolio rollup across a tenant's campaigns in one
 // aggregate query.
 func (r *Repository) TenantSummary(ctx context.Context, q db.Querier, tenantID uuid.UUID) (TenantSummary, error) {

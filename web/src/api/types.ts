@@ -207,6 +207,15 @@ export interface TenantSummary {
   campaigns: CampaignSummary[];
 }
 
+export interface PlatformTenant {
+  tenant_id: string;
+  name: string;
+  slug: string;
+  campaigns: number;
+  totals: ReportTotals;
+  rates: ReportRates;
+}
+
 export interface OSINTLookalike {
   domain: string;
   fuzzer: string;

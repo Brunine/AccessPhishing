@@ -220,6 +220,14 @@ func (s *Server) Router() http.Handler {
 				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/deactivate", s.deactivateUser)
 			})
 
+			// Platform-admin cross-tenant oversight (admin = platform-level in
+			// this internal, self-hosted deployment; read-only KPI rollups).
+			r.With(auth.RequireRole(auth.RoleAdmin)).Route("/platform", func(r chi.Router) {
+				r.Get("/tenants", s.platformTenants)
+				r.Get("/tenants/{id}/summary", s.platformTenantSummary)
+				r.Get("/tenants/{id}/summary.pdf", s.platformTenantSummaryPDF)
+			})
+
 			// M3 delivery: templates, sending profiles, approvals (operator).
 			r.With(auth.RequireRole(auth.RoleOperator)).Route("/templates", func(r chi.Router) {
 				r.Post("/", s.createTemplate)

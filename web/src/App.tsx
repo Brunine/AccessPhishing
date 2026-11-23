@@ -3,6 +3,8 @@ import { useSession } from "./auth";
 import { KeyGate, Layout } from "./components/Layout";
 import { Spinner } from "./components/ui";
 import Tenants from "./pages/Tenants";
+import Platform from "./pages/Platform";
+import PlatformTenant from "./pages/PlatformTenant";
 import Overview from "./pages/Overview";
 import Contacts from "./pages/Contacts";
 import Campaigns from "./pages/Campaigns";
@@ -41,6 +43,14 @@ export default function App() {
         <Route
           path="/tenants"
           element={isAdmin ? <Tenants /> : <Navigate to="/campaigns" replace />}
+        />
+        <Route
+          path="/platform"
+          element={isAdmin ? <Platform /> : <Navigate to="/overview" replace />}
+        />
+        <Route
+          path="/platform/:id"
+          element={isAdmin ? <PlatformTenant /> : <Navigate to="/overview" replace />}
         />
         <Route path="*" element={<Navigate to="/campaigns" replace />} />
       </Routes>

@@ -17,6 +17,7 @@ import type {
   ListResponse,
   OSINTResult,
   OSINTStatus,
+  PlatformTenant,
   SendingProfile,
   Template,
   Tenant,
@@ -283,6 +284,15 @@ export const api = {
       request<User>("POST", "/users", b),
     deactivate: (id: string) =>
       request<User>("POST", `/users/${id}/deactivate`),
+  },
+
+  platform: {
+    tenants: () =>
+      request<ListResponse<PlatformTenant>>("GET", "/platform/tenants").then(items),
+    summary: (id: string) =>
+      request<TenantSummary>("GET", `/platform/tenants/${id}/summary`),
+    summaryPdf: (id: string) =>
+      downloadFile(`/platform/tenants/${id}/summary.pdf`, `tenant-${id}.pdf`),
   },
 
   apiKeys: {
