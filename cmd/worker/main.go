@@ -61,6 +61,10 @@ func main() {
 		ClientSecret: cfg.GmailClientSecret,
 		RefreshToken: cfg.GmailRefreshToken,
 	})
+	sender.UseSMS(delivery.SMSConfig{
+		BaseURL: cfg.TwilioBaseURL,
+		Timeout: cfg.TwilioTimeout,
+	})
 
 	bounces := bounce.NewRepository(events.NewRepository(pool))
 

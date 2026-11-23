@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.9.6
+  version: 0.9.7
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -754,32 +754,37 @@ paths:
   /sending-profiles:
     post:
       operationId: createSendingProfile
-      summary: Create a sending profile (smtp|graph|gmail); the secret is encrypted at rest (operator)
+      summary: Create a sending profile (smtp|graph|gmail|sms); the secret is encrypted at rest (operator)
       description: >
         channel selects the transport (0.9.1). smtp requires smtp_host/smtp_port
         and uses smtp_pass; graph/gmail use from_address as the sender mailbox,
         optional api_tenant_id/api_client_id, and the secret field (falling back
-        to the process GRAPH_* config). The per-channel secret is AES-256-GCM
-        encrypted and never returned. gmail is accepted but not yet sending (M3
-        part 2).
+        to the process GRAPH_* config). sms (0.9.7) requires sms_provider
+        (twilio) and sms_sender_id (the E.164 From / sender id), with
+        api_client_id as the Twilio Account SID and secret as the auth token;
+        from_address is not required for sms. The per-channel secret is
+        AES-256-GCM encrypted and never returned. gmail is accepted but not yet
+        sending (M3 part 2).
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name, from_address]
+              required: [name]
               properties:
                 name:          { type: string }
-                channel:       { type: string, enum: [smtp, graph, gmail], default: smtp }
+                channel:       { type: string, enum: [smtp, graph, gmail, sms], default: smtp }
                 smtp_host:     { type: string, description: required for smtp }
                 smtp_port:     { type: integer, description: required for smtp }
                 smtp_user:     { type: string }
                 smtp_pass:     { type: string, description: smtp secret; write-only, encrypted, never returned }
-                secret:        { type: string, description: API client secret for graph/gmail; write-only, encrypted }
+                secret:        { type: string, description: API client secret (graph/gmail) or Twilio auth token (sms); write-only, encrypted }
                 api_tenant_id: { type: string, description: e.g. Graph tenant id (non-secret) }
-                api_client_id: { type: string, description: e.g. Graph client id (non-secret) }
-                from_address:  { type: string, description: sender address / mailbox }
+                api_client_id: { type: string, description: Graph client id, or Twilio Account SID for sms (non-secret) }
+                sms_provider:  { type: string, enum: [twilio], description: required for sms }
+                sms_sender_id: { type: string, description: "sms From / sender id (E.164, e.g. +15551234567); required for sms" }
+                from_address:  { type: string, description: sender address / mailbox (required except for sms) }
                 from_name:     { type: string }
                 tls_mode:      { type: string, enum: [none, starttls, smtps], default: starttls }
       responses:
@@ -1250,6 +1255,7 @@ components:
         first_name: { type: string }
         last_name:  { type: string }
         phone:      { type: string }
+        phone_e164: { type: string, description: "E.164 phone (^\\+[1-9][0-9]{7,14}$); enables SMS. On import an invalid value is dropped." }
         group_id:   { type: string, format: uuid, nullable: true }
         attributes: { type: object, additionalProperties: true }
     Contact:
@@ -1262,6 +1268,7 @@ components:
         first_name: { type: string, nullable: true }
         last_name:  { type: string, nullable: true }
         phone:      { type: string, nullable: true }
+        phone_e164: { type: string, nullable: true, description: E.164 phone; enables SMS }
         attributes: { type: object, additionalProperties: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -1293,8 +1300,8 @@ components:
       properties:
         kind:    { type: string, enum: [email, sms, landing, phishlet, script, voice], default: email }
         name:    { type: string }
-        subject: { type: string }
-        body:    { type: string, description: Go text/template, e.g. "Hi {{.first_name}} {{.link}}" }
+        subject: { type: string, description: ignored for sms (plain text only) }
+        body:    { type: string, description: 'Go text/template, e.g. "Hi {{.first_name}} {{.link}}". For kind=sms the body is plain text and must be <= 1600 characters (400 otherwise).' }
     Template:
       type: object
       properties:
@@ -1390,12 +1397,14 @@ components:
         id:            { type: string, format: uuid }
         tenant_id:     { type: string, format: uuid }
         name:          { type: string }
-        channel:       { type: string, enum: [smtp, graph, gmail] }
+        channel:       { type: string, enum: [smtp, graph, gmail, sms] }
         smtp_host:     { type: string }
         smtp_port:     { type: integer }
         smtp_user:     { type: string, nullable: true }
         api_tenant_id: { type: string, nullable: true }
-        api_client_id: { type: string, nullable: true }
+        api_client_id: { type: string, nullable: true, description: Twilio Account SID for sms }
+        sms_provider:  { type: string, nullable: true, enum: [twilio] }
+        sms_sender_id: { type: string, nullable: true, description: sms From / sender id }
         from_address:  { type: string }
         from_name:     { type: string, nullable: true }
         tls_mode:      { type: string, enum: [none, starttls, smtps] }

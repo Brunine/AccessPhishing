@@ -12,9 +12,9 @@ import {
   timeago,
 } from "../components/ui";
 
-// parseCSV reads a header row (email,first_name,last_name,phone in any order)
-// and returns one object per data row. Commas only; quoted fields not required
-// for the simple operator import path.
+// parseCSV reads a header row (email,first_name,last_name,phone,phone_e164 in
+// any order) and returns one object per data row. Commas only; quoted fields
+// not required for the simple operator import path.
 function parseCSV(text: string): Partial<Contact>[] {
   const lines = text
     .split(/\r?\n/)
@@ -23,7 +23,9 @@ function parseCSV(text: string): Partial<Contact>[] {
   if (lines.length === 0) return [];
   const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
   const hasHeader = header.includes("email");
-  const cols = hasHeader ? header : ["email", "first_name", "last_name", "phone"];
+  const cols = hasHeader
+    ? header
+    : ["email", "first_name", "last_name", "phone", "phone_e164"];
   const rows = hasHeader ? lines.slice(1) : lines;
   return rows.map((line) => {
     const cells = line.split(",").map((c) => c.trim());
@@ -35,6 +37,7 @@ function parseCSV(text: string): Partial<Contact>[] {
       else if (c === "first_name" || c === "firstname") obj.first_name = v;
       else if (c === "last_name" || c === "lastname") obj.last_name = v;
       else if (c === "phone") obj.phone = v;
+      else if (c === "phone_e164" || c === "mobile" || c === "e164") obj.phone_e164 = v;
     });
     return obj;
   });
@@ -190,6 +193,7 @@ function ContactsPanel({
         first_name: form.first_name,
         last_name: form.last_name,
         phone: form.phone,
+        phone_e164: form.phone_e164 || undefined,
         group_id: form.group_id || undefined,
       });
       setForm({});
@@ -218,7 +222,7 @@ function ContactsPanel({
     <div>
       <form
         onSubmit={create}
-        className="card mb-4 grid gap-3 sm:grid-cols-[1.5fr_1fr_1fr_1fr_auto] sm:items-end"
+        className="card mb-4 grid gap-3 sm:grid-cols-[1.5fr_1fr_1fr_1fr_1fr_auto] sm:items-end"
       >
         <Field label="Email">
           <input
@@ -242,6 +246,14 @@ function ContactsPanel({
             className="input"
             value={form.last_name ?? ""}
             onChange={(e) => setForm({ ...form, last_name: e.target.value })}
+          />
+        </Field>
+        <Field label="Phone (E.164)">
+          <input
+            className="input"
+            value={form.phone_e164 ?? ""}
+            onChange={(e) => setForm({ ...form, phone_e164: e.target.value })}
+            placeholder="+15551234567"
           />
         </Field>
         <Field label="Group">
@@ -275,6 +287,7 @@ function ContactsPanel({
             <tr>
               <th className="th">Email</th>
               <th className="th">Name</th>
+              <th className="th">Phone</th>
               <th className="th">Group</th>
               <th className="th">Added</th>
               <th className="th"></th>
@@ -287,6 +300,7 @@ function ContactsPanel({
               <td className="td text-slate-300">
                 {[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}
               </td>
+              <td className="td text-slate-400">{c.phone_e164 ?? "—"}</td>
               <td className="td text-slate-400">{groupName(c.group_id)}</td>
               <td className="td text-slate-400">{timeago(c.created_at)}</td>
               <td className="td text-right">
@@ -348,8 +362,9 @@ function ImportPanel({
     <div className="card">
       <h2 className="mb-1 text-sm font-semibold text-slate-200">CSV import</h2>
       <p className="mb-3 text-xs text-slate-500">
-        Header row <code>email,first_name,last_name,phone</code>. Suppressed and
-        duplicate addresses are skipped.
+        Header row <code>email,first_name,last_name,phone,phone_e164</code>.
+        <code>phone_e164</code> (E.164, e.g. +15551234567) enables SMS; an
+        invalid value is dropped. Suppressed and duplicate addresses are skipped.
       </p>
       <ErrorBanner error={err} />
       <textarea

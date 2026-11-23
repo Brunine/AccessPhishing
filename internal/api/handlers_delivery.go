@@ -46,6 +46,13 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "invalid template kind")
 		return
 	}
+	// SMS hard cap: a single message is ~160 chars (one segment); beyond one
+	// segment is allowed (the console warns), but 1600 chars (~10 segments) is
+	// the maximum we accept.
+	if in.Kind == "sms" && len(in.Body) > 1600 {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "sms template body exceeds 1600 characters")
+		return
+	}
 	p, _ := auth.FromContext(r.Context())
 
 	tx, err := s.pool.Begin(r.Context())
@@ -120,6 +127,13 @@ func (s *Server) updateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	if !tmpl.ValidKind(in.Kind) {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "invalid template kind")
+		return
+	}
+	// SMS hard cap: a single message is ~160 chars (one segment); beyond one
+	// segment is allowed (the console warns), but 1600 chars (~10 segments) is
+	// the maximum we accept.
+	if in.Kind == "sms" && len(in.Body) > 1600 {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "sms template body exceeds 1600 characters")
 		return
 	}
 	p, _ := auth.FromContext(r.Context())
@@ -203,9 +217,11 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 		SMTPPort    int    `json:"smtp_port"`
 		SMTPUser    string `json:"smtp_user"`
 		SMTPPass    string `json:"smtp_pass"`
-		Secret      string `json:"secret"` // API client secret (graph/gmail)
+		Secret      string `json:"secret"` // API client secret / SMS auth token
 		APITenantID string `json:"api_tenant_id"`
-		APIClientID string `json:"api_client_id"`
+		APIClientID string `json:"api_client_id"` // Graph/Gmail client id or Twilio Account SID
+		SMSProvider string `json:"sms_provider"`
+		SMSSenderID string `json:"sms_sender_id"`
 		FromAddress string `json:"from_address"`
 		FromName    string `json:"from_name"`
 		TLSMode     string `json:"tls_mode"`
@@ -217,20 +233,24 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 		b.Channel = "smtp"
 	}
 	if !sendingprofile.ValidChannel(b.Channel) {
-		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "channel must be one of smtp, graph, gmail")
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "channel must be one of smtp, graph, gmail, sms")
 		return
 	}
-	if b.Name == "" || b.FromAddress == "" {
-		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "name and from_address are required")
+	if b.Name == "" {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "name is required")
 		return
 	}
 
-	// The per-channel secret (SMTP password or API client secret) and the
-	// secret source differ by channel.
+	// The per-channel secret and its validation differ by channel.
 	secret := b.SMTPPass
-	if b.Channel == "smtp" {
+	switch b.Channel {
+	case "smtp":
 		if b.SMTPHost == "" || b.SMTPPort == 0 {
 			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "smtp_host and smtp_port are required for the smtp channel")
+			return
+		}
+		if b.FromAddress == "" {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "from_address is required")
 			return
 		}
 		if b.TLSMode == "" {
@@ -240,8 +260,22 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "invalid tls_mode")
 			return
 		}
-	} else {
-		// API channel: from_address is the sender mailbox; smtp_* unused.
+	case "sms":
+		// SMS uses provider + sender_id; credentials are the account SID
+		// (api_client_id, non-secret) + auth token (secret). from_address/smtp
+		// are unused.
+		if !sendingprofile.ValidSMSProvider(b.SMSProvider) {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "sms_provider must be one of: twilio")
+			return
+		}
+		secret = b.Secret
+		b.SMTPHost, b.SMTPPort, b.SMTPUser = "", 0, ""
+		b.TLSMode = "none"
+	default: // graph, gmail
+		if b.FromAddress == "" {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "from_address is required")
+			return
+		}
 		secret = b.Secret
 		b.SMTPHost, b.SMTPPort, b.SMTPUser = "", 0, ""
 		b.TLSMode = "none"
@@ -272,6 +306,7 @@ func (s *Server) createSendingProfile(w http.ResponseWriter, r *http.Request) {
 	prof, err := s.profiles.Create(r.Context(), tx, p.TenantID, sendingprofile.Input{
 		Name: b.Name, Channel: b.Channel, SMTPHost: b.SMTPHost, SMTPPort: b.SMTPPort, SMTPUser: b.SMTPUser,
 		PassEncrypted: encrypted, APITenantID: b.APITenantID, APIClientID: b.APIClientID,
+		SMSProvider: b.SMSProvider, SMSSenderID: b.SMSSenderID,
 		FromAddress: b.FromAddress, FromName: b.FromName, TLSMode: b.TLSMode,
 	})
 	if err != nil {

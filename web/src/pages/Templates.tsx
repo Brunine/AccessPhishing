@@ -29,6 +29,9 @@ export default function Templates() {
   const [formErr, setFormErr] = useState<unknown>(null);
 
   const editing = Boolean(form.id);
+  const isSMS = form.kind === "sms";
+  const smsLen = form.body.length;
+  const smsSegments = smsLen === 0 ? 0 : Math.ceil(smsLen / 160);
 
   function edit(t: Template) {
     setForm({
@@ -53,7 +56,7 @@ export default function Templates() {
       const payload = {
         kind: form.kind,
         name: form.name,
-        subject: form.subject || undefined,
+        subject: isSMS ? undefined : form.subject || undefined,
         body: form.body,
       };
       if (form.id) await api.templates.update(form.id, payload);
@@ -115,23 +118,48 @@ export default function Templates() {
               />
             </Field>
           </div>
-          <Field label="Subject">
-            <input
-              className="input"
-              value={form.subject}
-              onChange={(e) => setForm({ ...form, subject: e.target.value })}
-              placeholder="Action required, {{.first_name}}"
-            />
-          </Field>
-          <Field label="Body">
+          {!isSMS && (
+            <Field label="Subject">
+              <input
+                className="input"
+                value={form.subject}
+                onChange={(e) => setForm({ ...form, subject: e.target.value })}
+                placeholder="Action required, {{.first_name}}"
+              />
+            </Field>
+          )}
+          <Field label={isSMS ? "Message text" : "Body"}>
             <textarea
               className="input h-56 font-mono text-xs"
               value={form.body}
               onChange={(e) => setForm({ ...form, body: e.target.value })}
-              placeholder={'<p>Hi {{.first_name}},</p>\n<p><a href="{{.link}}">Review now</a></p>'}
+              placeholder={
+                isSMS
+                  ? "Hi {{.first_name}}, please review: {{.link}}"
+                  : '<p>Hi {{.first_name}},</p>\n<p><a href="{{.link}}">Review now</a></p>'
+              }
               required
             />
           </Field>
+          {isSMS && (
+            <p
+              className={`-mt-1 text-xs ${
+                smsLen > 1600
+                  ? "text-rose-300"
+                  : smsSegments > 1
+                    ? "text-amber-300"
+                    : "text-slate-500"
+              }`}
+            >
+              {smsLen} chars · {smsSegments} segment{smsSegments === 1 ? "" : "s"}
+              {smsLen > 1600
+                ? " — exceeds the 1600-character limit (will be rejected)"
+                : smsSegments > 1
+                  ? " — over one 160-char segment; sends as multiple parts"
+                  : ""}
+              . Note: link length is fixed at send time.
+            </p>
+          )}
           <div className="flex gap-2">
             <button className="btn-primary" disabled={busy || !form.name || !form.body}>
               {busy ? "Saving…" : editing ? "Save changes" : "Create"}

@@ -51,7 +51,8 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 - [x] M8 Dashboard (web/ operator console + reporting/KPI aggregation +
       dashboard charts + executive PDF export + platform-admin cross-tenant
       console)
-- [ ] M9 Secondary vectors (SMS, QR, BitB injects, Asterisk vishing + local TTS)
+- [~] M9 Secondary vectors (M9a SMS/smishing DONE; M9b QR/quishing, M9c
+      collaboration channels, M9d MFA-fatigue still open; BitB injects declined)
 - [ ] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
 
 Victim state machine: sent → delivered → opened → clicked → creds → session_hijacked → post_exploitation
@@ -63,6 +64,63 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M9a — SMS delivery (smishing) as a new sending-profile channel.
+  COMPLETE. Extends the existing email channel pattern (channelSender +
+  resolveSender dispatch); the email path was not refactored. M9b quishing,
+  M9c collaboration channels, M9d MFA-fatigue still open.
+- Done (M9a SMS):
+  - Migration 0014: 'sms' added to delivery_channel enum (ADD VALUE IF NOT
+    EXISTS, in its own tx); sending_profiles gain sms_provider + sms_sender_id;
+    contacts gain nullable phone_e164 TEXT with a CHECK (^\+[1-9][0-9]{7,14}$).
+    No new tables. .down.sql drops the two profile columns + phone_e164 (the
+    enum value cannot be dropped — noted).
+  - internal/delivery/sms.go: Twilio Messages API sender. newSMSSender reuses
+    the profile's api_client_id as the Account SID and the AES-GCM `secret`
+    (smtp_pass_encrypted column) as the auth token; sms_sender_id = From.
+    Send POSTs form-encoded To/Body/From to {TWILIO_BASE_URL}/2010-04-01/
+    Accounts/{SID}/Messages.json with HTTP basic auth, capped (1MiB) response,
+    non-2xx => wrapped error (=> 'failed' event, never panic). Fails fast when
+    SID/token empty. channel.go resolveSender: case "sms". No open pixel.
+  - delivery.go SendCampaign: isSMS branch — subject template parsed only when
+    !isSMS; per recipient, phone from contacts.phone_e164 (empty => 'failed'
+    event meta{error:"recipient has no phone number"}), body rendered from the
+    template, chSender.Send(ctx, phone, "", body). Email path unchanged. Funnel
+    starts at 'sent' and advances only via the existing /t/{token} click.
+  - sendingprofile repo: ValidChannel += sms; ValidSMSProvider (twilio);
+    SMSProvider/SMSSenderID on Profile + Input; cols/scan/Create updated.
+  - contact repo: Contact.PhoneE164 + Input.PhoneE164; ValidE164 (regexp);
+    cols/scan/Create/Update/BulkImport updated. BulkImport drops an invalid/
+    absent E.164 (lenient, no batch fail).
+  - HTTP: createSendingProfile switch(channel) — sms requires ValidSMSProvider
+    + sms_sender_id, secret=auth token, from_address not required, smtp fields
+    cleared/tls none. Template create/update: kind=sms body >1600 chars => 400.
+    Contacts create/update: invalid phone_e164 => 400; import lenient.
+    Launch: when the bound profile is sms, a count query refuses the launch
+    (400 with the missing count) if any selected recipient lacks a phone;
+    suppression honored as before.
+  - config: TWILIO_BASE_URL (default https://api.twilio.com), TWILIO_TIMEOUT
+    (default 15s); only base URL/timeout from env, credentials per-profile.
+    .env.example documents them. cmd/worker wires sender.UseSMS(cfg). Empty
+    integration => profile creation works, send fails per-recipient.
+  - web/: SendingProfiles form has a channel selector (SMTP|SMS); the SMS
+    variant shows provider + sender id + Account SID + write-only auth token and
+    hides the SMTP fields; table shows a Channel column. Templates editor hides
+    subject for kind=sms and shows a char/segment length hint (warn >160, error
+    >1600). Contacts form + CSV import + table carry phone_e164. Campaign launch
+    profile selector shows [channel].
+  - OpenAPI 0.9.7: channel 'sms' + sms_provider/sms_sender_id on sending
+    profiles (required relaxed to [name]; per-channel notes), phone_e164 on
+    Contact/ContactInput, sms body <=1600 note on TemplateInput.
+  - Tests: internal/delivery/sms_test.go (httptest fake Twilio — basic auth,
+    To/From/Body/path, 4xx => error, missing-creds fail-fast, timeout);
+    internal/contact/repository_test.go (ValidE164 valid/invalid);
+    test/integration/sms_test.go (create sms profile [auth token ciphertext at
+    rest, not leaked] => sms template + length-guard 400 => invalid-E.164 400 =>
+    missing-phone launch 400 => happy launch => approval gate 403->202 =>
+    SendCampaign over mocked Twilio: sent=1 failed=0, provider To/From/SID/body
+    asserted, 1 'sent' + 0 'opened' => /t click => 1 'clicked' + still 0
+    'opened'). go build/vet/test clean; full suite green; web build clean (53
+    modules); touched Go files gofmt-clean (LF). Dev DB migrated to 0014 (v14).
 - Milestone: docs pass — COMPLETE (documentation only; no code changes).
 - Done (docs pass):
   - README.md (root, new): what-it-is + authorized-use-only note, architecture

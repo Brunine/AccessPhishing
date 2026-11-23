@@ -118,7 +118,8 @@ function LaunchForm({
             <option value="">Select…</option>
             {(profiles.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} — {p.from_address}
+                [{p.channel}] {p.name} —{" "}
+                {p.channel === "sms" ? p.sms_sender_id ?? p.sms_provider : p.from_address}
               </option>
             ))}
           </select>

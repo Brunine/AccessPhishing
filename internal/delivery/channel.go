@@ -60,6 +60,8 @@ func (s *Sender) resolveSender(tenantID uuid.UUID, p sendingprofile.Profile) (ch
 		return newGraphSender(p, s.graph, secret), nil
 	case "gmail":
 		return newGmailSender(p, s.gmail, secret), nil
+	case "sms":
+		return newSMSSender(p, s.sms, secret), nil
 	default:
 		return nil, fmt.Errorf("delivery: unknown channel %q", channel)
 	}

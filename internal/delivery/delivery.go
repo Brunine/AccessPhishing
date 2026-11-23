@@ -38,6 +38,7 @@ type Sender struct {
 	concurrency int
 	graph       GraphConfig
 	gmail       GmailConfig
+	sms         SMSConfig
 }
 
 // NewSender constructs a Sender.
@@ -62,6 +63,7 @@ type target struct {
 	contactID   uuid.UUID
 	token       string
 	email       string
+	phoneE164   *string
 	firstName   *string
 	lastName    *string
 }
@@ -93,9 +95,15 @@ func (s *Sender) SendCampaign(ctx context.Context, tenantID, campaignID uuid.UUI
 		return Result{}, err
 	}
 
-	subjectTpl, err := template.New("subject").Option("missingkey=zero").Parse(deref(tpl.Subject))
-	if err != nil {
-		return Result{}, fmt.Errorf("delivery: parse subject template: %w", err)
+	isSMS := profile.Channel == "sms"
+
+	// SMS renders the (plain-text) body only; email also renders a subject.
+	var subjectTpl *template.Template
+	if !isSMS {
+		subjectTpl, err = template.New("subject").Option("missingkey=zero").Parse(deref(tpl.Subject))
+		if err != nil {
+			return Result{}, fmt.Errorf("delivery: parse subject template: %w", err)
+		}
 	}
 	bodyTpl, err := template.New("body").Option("missingkey=zero").Parse(tpl.Body)
 	if err != nil {
@@ -128,14 +136,34 @@ func (s *Sender) SendCampaign(ctx context.Context, tenantID, campaignID uuid.UUI
 				"pixel":      s.baseURL + "/px/" + t.token,
 				"token":      t.token,
 			}
-			var subj, body strings.Builder
+			var body strings.Builder
 			evType := events.TypeSent
-			if err := subjectTpl.Execute(&subj, data); err != nil {
-				evType = events.TypeFailed
-			} else if err := bodyTpl.Execute(&body, data); err != nil {
-				evType = events.TypeFailed
-			} else if err := chSender.Send(ctx, t.email, subj.String(), body.String()); err != nil {
-				evType = events.TypeFailed
+			meta := map[string]any{}
+
+			if isSMS {
+				phone := deref(t.phoneE164)
+				meta["phone"] = phone
+				if phone == "" {
+					// Missing phone on an SMS recipient is a clean per-recipient
+					// failure, not a crash.
+					evType = events.TypeFailed
+					meta["error"] = "recipient has no phone number"
+				} else if err := bodyTpl.Execute(&body, data); err != nil {
+					evType = events.TypeFailed
+				} else if err := chSender.Send(ctx, phone, "", body.String()); err != nil {
+					evType = events.TypeFailed
+					meta["error"] = err.Error()
+				}
+			} else {
+				meta["email"] = t.email
+				var subj strings.Builder
+				if err := subjectTpl.Execute(&subj, data); err != nil {
+					evType = events.TypeFailed
+				} else if err := bodyTpl.Execute(&body, data); err != nil {
+					evType = events.TypeFailed
+				} else if err := chSender.Send(ctx, t.email, subj.String(), body.String()); err != nil {
+					evType = events.TypeFailed
+				}
 			}
 
 			_, _ = s.events.Append(ctx, events.NewEvent{
@@ -143,7 +171,7 @@ func (s *Sender) SendCampaign(ctx context.Context, tenantID, campaignID uuid.UUI
 				CampaignID: campaignID,
 				ContactID:  t.contactID,
 				Type:       evType,
-				Metadata:   map[string]any{"email": t.email},
+				Metadata:   meta,
 			})
 
 			mu.Lock()
@@ -160,7 +188,7 @@ func (s *Sender) SendCampaign(ctx context.Context, tenantID, campaignID uuid.UUI
 }
 
 func (s *Sender) loadTargets(ctx context.Context, campaignID uuid.UUID) ([]target, error) {
-	const sql = `SELECT r.id, r.contact_id, r.token, c.email, c.first_name, c.last_name
+	const sql = `SELECT r.id, r.contact_id, r.token, c.email, c.phone_e164, c.first_name, c.last_name
 	             FROM recipients r JOIN contacts c ON c.id = r.contact_id
 	             WHERE r.campaign_id = $1 ORDER BY r.created_at`
 	rows, err := s.pool.Query(ctx, sql, campaignID)
@@ -171,7 +199,7 @@ func (s *Sender) loadTargets(ctx context.Context, campaignID uuid.UUID) ([]targe
 	var out []target
 	for rows.Next() {
 		var t target
-		if err := rows.Scan(&t.recipientID, &t.contactID, &t.token, &t.email, &t.firstName, &t.lastName); err != nil {
+		if err := rows.Scan(&t.recipientID, &t.contactID, &t.token, &t.email, &t.phoneE164, &t.firstName, &t.lastName); err != nil {
 			return nil, fmt.Errorf("delivery: scan target: %w", err)
 		}
 		out = append(out, t)

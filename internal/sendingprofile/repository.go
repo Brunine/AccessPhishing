@@ -31,7 +31,17 @@ func ValidTLSMode(m string) bool {
 // ValidChannel reports whether c is a valid delivery_channel enum value.
 func ValidChannel(c string) bool {
 	switch c {
-	case "smtp", "graph", "gmail":
+	case "smtp", "graph", "gmail", "sms":
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidSMSProvider reports whether p is a supported SMS provider slug.
+func ValidSMSProvider(p string) bool {
+	switch p {
+	case "twilio":
 		return true
 	default:
 		return false
@@ -52,6 +62,8 @@ type Profile struct {
 	PassEncrypted *string   `json:"-"`
 	APITenantID   *string   `json:"api_tenant_id,omitempty"`
 	APIClientID   *string   `json:"api_client_id,omitempty"`
+	SMSProvider   *string   `json:"sms_provider,omitempty"`
+	SMSSenderID   *string   `json:"sms_sender_id,omitempty"`
 	FromAddress   string    `json:"from_address"`
 	FromName      *string   `json:"from_name,omitempty"`
 	TLSMode       string    `json:"tls_mode"`
@@ -70,6 +82,8 @@ type Input struct {
 	PassEncrypted string
 	APITenantID   string
 	APIClientID   string
+	SMSProvider   string
+	SMSSenderID   string
 	FromAddress   string
 	FromName      string
 	TLSMode       string
@@ -81,12 +95,13 @@ type Repository struct{}
 // NewRepository returns a sending-profile repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const cols = `id, tenant_id, name, channel, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, api_tenant_id, api_client_id, from_address, from_name, tls_mode, created_at, updated_at`
+const cols = `id, tenant_id, name, channel, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, api_tenant_id, api_client_id, sms_provider, sms_sender_id, from_address, from_name, tls_mode, created_at, updated_at`
 
 func scanProfile(row pgx.Row) (Profile, error) {
 	var p Profile
 	if err := row.Scan(&p.ID, &p.TenantID, &p.Name, &p.Channel, &p.SMTPHost, &p.SMTPPort, &p.SMTPUser,
-		&p.PassEncrypted, &p.APITenantID, &p.APIClientID, &p.FromAddress, &p.FromName, &p.TLSMode, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.PassEncrypted, &p.APITenantID, &p.APIClientID, &p.SMSProvider, &p.SMSSenderID,
+		&p.FromAddress, &p.FromName, &p.TLSMode, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return Profile{}, err
 	}
 	return p, nil
@@ -106,10 +121,11 @@ func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID uuid.UUI
 		channel = "smtp"
 	}
 	const sql = `INSERT INTO sending_profiles
-	             (tenant_id, name, channel, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, api_tenant_id, api_client_id, from_address, from_name, tls_mode)
-	             VALUES ($1, $2, $3::delivery_channel, $4, $5, $6, $7, $8, $9, $10, $11, $12::tls_mode) RETURNING ` + cols
+	             (tenant_id, name, channel, smtp_host, smtp_port, smtp_user, smtp_pass_encrypted, api_tenant_id, api_client_id, sms_provider, sms_sender_id, from_address, from_name, tls_mode)
+	             VALUES ($1, $2, $3::delivery_channel, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::tls_mode) RETURNING ` + cols
 	p, err := scanProfile(q.QueryRow(ctx, sql, tenantID, in.Name, channel, in.SMTPHost, in.SMTPPort,
 		nullIfEmpty(in.SMTPUser), nullIfEmpty(in.PassEncrypted), nullIfEmpty(in.APITenantID), nullIfEmpty(in.APIClientID),
+		nullIfEmpty(in.SMSProvider), nullIfEmpty(in.SMSSenderID),
 		in.FromAddress, nullIfEmpty(in.FromName), in.TLSMode))
 	if err != nil {
 		return Profile{}, fmt.Errorf("sendingprofile: create: %w", err)

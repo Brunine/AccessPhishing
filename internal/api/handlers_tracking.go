@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -56,11 +57,14 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	profileChannel := ""
 	if b.SendingProfileID != nil {
-		if _, err := s.profiles.GetByID(r.Context(), s.pool, p.TenantID, *b.SendingProfileID); err != nil {
+		prof, err := s.profiles.GetByID(r.Context(), s.pool, p.TenantID, *b.SendingProfileID)
+		if err != nil {
 			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "sending_profile_id not found in tenant")
 			return
 		}
+		profileChannel = prof.Channel
 	}
 
 	tx, err := s.pool.Begin(r.Context())
@@ -94,6 +98,27 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 	if len(targets) == 0 {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "no eligible recipients (empty selection or all suppressed)")
 		return
+	}
+
+	// An SMS campaign requires every recipient to have a phone number — this is
+	// a launch-time validation (clear count), not a silent per-recipient skip.
+	if profileChannel == "sms" {
+		ids := make([]uuid.UUID, len(targets))
+		for i, t := range targets {
+			ids[i] = t.ContactID
+		}
+		var missing int
+		if err := tx.QueryRow(r.Context(),
+			`SELECT count(*) FROM contacts WHERE tenant_id = $1 AND id = ANY($2) AND (phone_e164 IS NULL OR phone_e164 = '')`,
+			p.TenantID, ids).Scan(&missing); err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "check recipient phones")
+			return
+		}
+		if missing > 0 {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request",
+				fmt.Sprintf("%d selected recipient(s) have no phone number (required for an SMS campaign)", missing))
+			return
+		}
 	}
 
 	created, err := s.recipients.Snapshot(r.Context(), tx, p.TenantID, id, targets)

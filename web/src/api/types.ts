@@ -26,6 +26,7 @@ export interface Contact {
   first_name?: string;
   last_name?: string;
   phone?: string;
+  phone_e164?: string;
   attributes?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -71,13 +72,20 @@ export interface Template {
 
 export type TLSMode = "none" | "starttls" | "smtps";
 
+export type DeliveryChannel = "smtp" | "graph" | "gmail" | "sms";
+
 export interface SendingProfile {
   id: string;
   tenant_id: string;
   name: string;
+  channel: DeliveryChannel;
   smtp_host: string;
   smtp_port: number;
   smtp_user?: string;
+  api_tenant_id?: string;
+  api_client_id?: string;
+  sms_provider?: string;
+  sms_sender_id?: string;
   from_address: string;
   from_name?: string;
   tls_mode: TLSMode;

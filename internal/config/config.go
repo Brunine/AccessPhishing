@@ -40,6 +40,11 @@ type Config struct {
 	GmailClientSecret string
 	GmailRefreshToken string
 
+	// SMS delivery channel (Twilio). Credentials come from the profile; only
+	// the base URL + timeout are process-level.
+	TwilioBaseURL string
+	TwilioTimeout time.Duration
+
 	// OSINT microservice (all optional; missing => /osint endpoints 503).
 	OSINTBaseURL string
 	OSINTAPIKey  string
@@ -84,6 +89,9 @@ func Load() (Config, error) {
 		GmailClientID:     os.Getenv("GMAIL_CLIENT_ID"),
 		GmailClientSecret: os.Getenv("GMAIL_CLIENT_SECRET"),
 		GmailRefreshToken: os.Getenv("GMAIL_REFRESH_TOKEN"),
+
+		TwilioBaseURL: getenv("TWILIO_BASE_URL", "https://api.twilio.com"),
+		TwilioTimeout: getenvDuration("TWILIO_TIMEOUT", 15*time.Second),
 
 		OSINTBaseURL: os.Getenv("OSINT_BASE_URL"),
 		OSINTAPIKey:  os.Getenv("OSINT_API_KEY"),

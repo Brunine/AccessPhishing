@@ -21,6 +21,7 @@ type contactBody struct {
 	FirstName  string         `json:"first_name"`
 	LastName   string         `json:"last_name"`
 	Phone      string         `json:"phone"`
+	PhoneE164  string         `json:"phone_e164"`
 	GroupID    *uuid.UUID     `json:"group_id"`
 	Attributes map[string]any `json:"attributes"`
 }
@@ -31,6 +32,7 @@ func (b contactBody) toInput() contact.Input {
 		FirstName:  b.FirstName,
 		LastName:   b.LastName,
 		Phone:      b.Phone,
+		PhoneE164:  b.PhoneE164,
 		GroupID:    b.GroupID,
 		Attributes: b.Attributes,
 	}
@@ -59,6 +61,10 @@ func (s *Server) createContact(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Email == "" {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "email is required")
+		return
+	}
+	if b.PhoneE164 != "" && !contact.ValidE164(b.PhoneE164) {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "phone_e164 must be E.164, e.g. +15551234567")
 		return
 	}
 	p, _ := auth.FromContext(r.Context())
@@ -144,6 +150,10 @@ func (s *Server) updateContact(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Email == "" {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "email is required")
+		return
+	}
+	if b.PhoneE164 != "" && !contact.ValidE164(b.PhoneE164) {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "phone_e164 must be E.164, e.g. +15551234567")
 		return
 	}
 	p, _ := auth.FromContext(r.Context())
@@ -251,6 +261,12 @@ func (s *Server) importContacts(w http.ResponseWriter, r *http.Request) {
 		in := cb.toInput()
 		if b.GroupID != nil {
 			in.GroupID = b.GroupID // top-level group applies to all
+		}
+		// Import is lenient on phone: an invalid/absent E.164 is dropped (left
+		// null) rather than failing the whole batch. SMS campaigns validate
+		// presence at launch.
+		if in.PhoneE164 != "" && !contact.ValidE164(in.PhoneE164) {
+			in.PhoneE164 = ""
 		}
 		items = append(items, in)
 	}
