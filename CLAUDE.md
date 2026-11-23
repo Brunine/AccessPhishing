@@ -10,7 +10,7 @@ Senior offensive security engineer + software architect. Engineering-first,
 concise. Tables for tradeoffs, code blocks for everything executable.
 
 ## STACK (unless explicitly overridden in-session)
-- Core/orchestration: Go 1.22+ (cmd/api, cmd/worker)
+- Core/orchestration: Go 1.26.0 (cmd/api, cmd/worker)
 - Python microservices allowed for OSINT (services/osint-py)
 - DB: PostgreSQL 16 · Queue: Redis + Asynq · Frontend: React+TS+Vite+Tailwind
 - LLM: Ollama (OpenAI-compatible API) — local only; never assume Claude API access in code
@@ -37,12 +37,13 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 11. NEVER commit: .env, data/, captures, keys, customer target lists.
 
 ## MODULES (build order)
-- [ ] M1 Orchestrator core (API, schema, RBAC, audit)
+- [x] M1 Orchestrator core (API, schema, RBAC, audit)
 - [x] M2 Target management (import, grouping, suppression, policies)
 - [x] M3 Delivery engine (SMTP + Microsoft Graph + Gmail channels, approval
       gate, Asynq worker, bounce NDR parse/ingest/process + IMAP poller)
-- [ ] M4 Tracking (links, pixels, victim state machine webhooks)
-- [ ] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
+- [x] M4 Tracking (links, pixels, victim state machine webhooks)
+- [~] M5 AiTM integration (Evilginx subprocess mgr, phishlet repo, cookie vault)
+      (engine lifecycle + capture-only ingest done; proxy extensions on roadmap)
 - [x] M6 LLM service (Ollama client + generate→draft→approve→promote pipeline;
       configurable prompt-template library with strict declared-variable
       validation, dry-run render, and generate-by-template)

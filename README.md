@@ -53,7 +53,7 @@ data model, and the engine/capture boundary.
 
 ## Quickstart (local dev)
 
-Prerequisites: Go 1.26, Docker, Node 20+, and the
+Prerequisites: Go 1.26.0, Docker, Node 20+, and the
 [`golang-migrate`](https://github.com/golang-migrate/migrate) CLI.
 
 ```sh
@@ -225,7 +225,8 @@ API contract: [`docs/API_SPEC/openapi.yaml`](docs/API_SPEC/openapi.yaml).
 
 ## License
 
-**No `LICENSE` file is present in this repository.** Under default copyright this
-means all rights are reserved and others have no license to use the code. Add a
-`LICENSE` before publishing or distributing, then update this section to match
-it. (This README does not grant any license.)
+Proprietary and confidential. Copyright © 2026 Access Security. All rights
+reserved. This is an internal commercial product for internal use only; no
+redistribution or derivative works are permitted without written permission.
+See the [`LICENSE`](LICENSE) notice for the full terms. This README does not
+grant any license.
