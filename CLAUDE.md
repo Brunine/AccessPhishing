@@ -63,6 +63,30 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: docs pass — COMPLETE (documentation only; no code changes).
+- Done (docs pass):
+  - README.md (root, new): what-it-is + authorized-use-only note, architecture
+    sketch (ASCII), docker/migrate/seed/run quickstart (commands copied from the
+    Makefile + .env.example, not invented), M1–M8 feature table, full env-var
+    table generated from internal/config.go (DATABASE_URL required; optionals
+    degrade to 503), dev/test/CI section, project layout.
+  - docs/ARCHITECTURE.md (was an empty stub): components, campaign data flow
+    diagram (campaign→delivery→tracking events→report), data-model table of the
+    real tables + relationships, approval-gate + audit-trail design, the engine
+    model (supervised subprocess, per-run bearer stored SHA-256-hash-only,
+    capture-only ingest = metadata persisted / secret values never), trade-offs.
+  - docs/THREAT_MODEL.md (was an empty stub): the platform's own security model —
+    assets, trust boundaries (browser→API, engine→orchestrator, worker→
+    providers, OSINT), implemented mitigations (tenant scoping, bcrypt/
+    constant-time key compare, hash-only engine tokens, AES-GCM secrets,
+    capture-only, approval gate, append-only audit, self-lockout guards),
+    residual risks/operational requirements, and in-tool abuse prevention
+    (suppression + approval). No evasion/circumvention content.
+  - LICENSE: FLAGGED — no LICENSE file exists at repo root; README's License
+    section says so and does not invent one (all rights reserved by default
+    until one is added).
+  - Verification: docs-only diff (README.md + the two docs); go build/vet/test
+    green before and after; no Go files touched so the gofmt gate is unaffected.
 - Milestone: M8 multi-tenant portals — platform-admin cross-tenant console
   (M8 now fully done). Scope chosen by the user: a cross-tenant oversight
   console (not a viewer customer portal / not tenant switching).
