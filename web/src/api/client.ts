@@ -21,6 +21,7 @@ import type {
   Template,
   Tenant,
   TenantSummary,
+  User,
 } from "./types";
 
 const KEY_STORAGE = "phishforge.apiKey";
@@ -275,6 +276,14 @@ export const api = {
 
   activity: (limit = 50) =>
     request<Activity>("GET", `/activity?limit=${limit}`),
+
+  users: {
+    list: () => request<ListResponse<User>>("GET", "/users").then(items),
+    create: (b: { email: string; role: string }) =>
+      request<User>("POST", "/users", b),
+    deactivate: (id: string) =>
+      request<User>("POST", `/users/${id}/deactivate`),
+  },
 
   apiKeys: {
     list: () => request<ListResponse<APIKey>>("GET", "/api-keys").then(items),

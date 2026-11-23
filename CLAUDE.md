@@ -63,6 +63,28 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: operator user management.
+- Done (user management):
+  - internal/user: tenant-scoped repo. Create mirrors the seed tool
+    (INSERT users(tenant_id,email,role::user_role); active, no password —
+    key-based). List, GetByID, Deactivate (status 'active'->'inactive', which
+    disables the user's keys via apikey.Verify's status check), CountActiveAdmins,
+    ValidRole. User JSON exposes active (derived from status), never a password.
+  - HTTP /users (tenant-scoped, audited): GET list (operator), POST create
+    (admin; 409 dup email, 400 bad role/email), POST /{id}/deactivate (admin;
+    404 unknown, 409 already-inactive, 409 last-active-admin guard). Guard +
+    update + audit run in one tx. Routes use per-route roles (list operator,
+    mutations admin), like the /tenants group. No new migration.
+  - web/ Settings: a Users section (table email/role/status/created; admin-only
+    create form with role select + deactivate behind confirm, inline 409/403)
+    alongside the existing API-keys section.
+  - OpenAPI 0.9.5 (/users endpoints + User schema). Tests:
+    internal/user/repository_test.go (ValidRole, no DB); test/integration/
+    users_test.go (list no-secret, operator create/deactivate 403, admin create
+    201 + dup 409 + bad role 400, deactivate disables the user's key -> 401,
+    already-inactive 409, last-admin 409 then key still works, deactivate admin
+    when another remains 200, unknown 404, audit create=2/deactivate=2).
+    go build/vet/test clean; web build clean (51 modules); gofmt-clean.
 - Milestone: operator API key management.
 - Done (API key management):
   - internal/apikey: added Record + List (never returns secret/hash), KeyID on

@@ -33,6 +33,7 @@ import (
 	"phishforge/internal/suppression"
 	tmpl "phishforge/internal/template"
 	"phishforge/internal/tenant"
+	"phishforge/internal/user"
 )
 
 // Enqueuer schedules background tasks (implemented by internal/tasks.Client).
@@ -92,6 +93,7 @@ type Server struct {
 	reports      *report.Repository
 	osint        OSINTClient
 	osintResults *osintresult.Repository
+	users        *user.Repository
 }
 
 // NewServer constructs an API server from its dependencies.
@@ -120,6 +122,7 @@ func NewServer(d Deps) *Server {
 		reports:      report.NewRepository(),
 		osint:        d.OSINT,
 		osintResults: osintresult.NewRepository(),
+		users:        user.NewRepository(),
 	}
 }
 
@@ -207,6 +210,14 @@ func (s *Server) Router() http.Handler {
 				r.Get("/", s.listAPIKeys)
 				r.Post("/", s.createAPIKey)
 				r.Post("/{id}/revoke", s.revokeAPIKey)
+			})
+
+			// Operator user management (tenant-scoped). List is operator;
+			// create + deactivate require admin.
+			r.Route("/users", func(r chi.Router) {
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/", s.listUsers)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/", s.createUser)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/deactivate", s.deactivateUser)
 			})
 
 			// M3 delivery: templates, sending profiles, approvals (operator).

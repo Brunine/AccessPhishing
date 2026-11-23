@@ -239,6 +239,14 @@ export interface OSINTStatus {
   service: "ok" | "down";
 }
 
+export interface User {
+  id: string;
+  email: string;
+  role: "admin" | "operator" | "viewer";
+  active: boolean;
+  created_at: string;
+}
+
 export interface APIKey {
   id: string;
   name: string;

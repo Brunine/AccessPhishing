@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.9.4
+  version: 0.9.5
   description: >
     0.8.0 adds M5 part 1: managed engine registry and lifecycle (/engines) backed by an out-of-process supervisor; start/stop return 503 when ENGINE_BINARY_PATH is unset.
 servers:
@@ -597,6 +597,48 @@ paths:
                   context:       { type: object, additionalProperties: { type: string } }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /users:
+    get:
+      operationId: listUsers
+      summary: List tenant users (operator)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/User" } } } } } } }
+    post:
+      operationId: createUser
+      summary: Create a key-based user (admin)
+      description: M1/0.9.5. Mirrors the seed tool — email + role, active, no password. Access is granted by minting an API key for the user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email: { type: string }
+                role:  { type: string, enum: [admin, operator, viewer] }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /users/{id}/deactivate:
+    post:
+      operationId: deactivateUser
+      summary: Deactivate a user (admin)
+      description: >
+        Sets the user inactive (its API keys stop authenticating). Refused with
+        409 when it would leave the tenant with no active admin, or when the
+        user is already inactive.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Deactivated, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Last active admin, or already inactive, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
   /api-keys:
     get:
       operationId: listAPIKeys
@@ -1067,6 +1109,16 @@ components:
         status:     { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    User:
+      type: object
+      description: A key-based operator account (no password).
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        email:      { type: string }
+        role:       { type: string, enum: [admin, operator, viewer] }
+        active:     { type: boolean }
+        created_at: { type: string, format: date-time }
     APIKey:
       type: object
       description: An API key record; secret material (token/hash) is never returned.
