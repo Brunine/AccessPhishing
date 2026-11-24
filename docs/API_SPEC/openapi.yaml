@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.14.0
+  version: 0.15.0
   description: >
     0.14.0 adds M9b QR / quishing: a per-campaign `channel` (email|qr, default
     email), a `scanned` victim-state-machine step that slots in before clicked
@@ -274,6 +274,14 @@ paths:
                 group_id:    { type: string, format: uuid }
                 contact_ids: { type: array, items: { type: string, format: uuid } }
                 landing_url: { type: string, description: click redirect target }
+                app_profile_id:
+                  type: string
+                  format: uuid
+                  description: >
+                    optional M10b application profile to bind. The profile's auth
+                    method must be form/basic and its MFA mode none/totp_field
+                    (else 409/501). Its checksum + version are frozen on the
+                    campaign at launch (profile_checksum/profile_version).
             example: { group_id: "…", landing_url: "https://portal.example/awareness" }
       responses:
         "200":
@@ -290,7 +298,8 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { description: No bound engagement, or the bound engagement is not authorized, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
         "404": { $ref: "#/components/responses/Problem" }
-        "409": { description: Campaign is not in draft, or the bound engagement is expired/terminated, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "409": { description: "Campaign not in draft; bound engagement expired/terminated; or AUTH-METHOD-UNSUPPORTED (bound profile's auth method is not form/basic)", content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "501": { description: "MFA-METHOD-UNSUPPORTED — bound profile's MFA mode is not none/totp_field", content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
   /campaigns/{id}/links:
     get:
@@ -1258,6 +1267,109 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { description: Last active admin, or already inactive, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
+  /profiles:
+    get:
+      operationId: listProfiles
+      summary: List application profiles (operator)
+      description: M10b/0.15.0. Tenant-scoped; newest first.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AppProfile" } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createProfile
+      summary: Create a profile revision from a JSON {spec_yaml} envelope (operator)
+      description: >
+        M10b/0.15.0. The YAML is validated against every docs/PROFILES/VALIDATION.md
+        rule; a new version N+1 is stored for the declared metadata.name. Reserved
+        auth/MFA methods are storable (not import-blocked) but refused at launch.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spec_yaml]
+              properties:
+                spec_yaml: { type: string, description: the profile YAML document }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/AppProfile" } } } }
+        "400":
+          description: Validation failed — body carries a violations[] array of {id, severity, message, path} with the exact rule IDs
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProfileValidationProblem" } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /profiles/import:
+    post:
+      operationId: importProfile
+      summary: Import a profile revision from a raw YAML body (operator)
+      description: M10b/0.15.0. Same semantics as POST /profiles; body is raw YAML (text/yaml). Stores version N+1.
+      requestBody:
+        required: true
+        content:
+          text/yaml:
+            schema: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/AppProfile" } } } }
+        "400": { description: Validation failed, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileValidationProblem" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /profiles/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getProfile
+      summary: Get a profile (operator)
+      responses:
+        "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/AppProfile" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateProfile
+      summary: Replace a profile revision's spec in place (operator)
+      description: M10b/0.15.0. Re-validates. The version is unchanged; the checksum is recomputed. Does NOT affect already-launched campaigns' frozen stamps.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spec_yaml]
+              properties:
+                spec_yaml: { type: string }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/AppProfile" } } } }
+        "400": { description: Validation failed, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileValidationProblem" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteProfile
+      summary: Delete a profile (operator)
+      description: Launched campaigns keep their frozen checksum (the FK is ON DELETE SET NULL).
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api-keys:
     get:
       operationId: listAPIKeys
@@ -2213,6 +2325,40 @@ components:
         is_default:    { type: boolean }
         created_at:    { type: string, format: date-time }
         updated_at:    { type: string, format: date-time }
+    AppProfile:
+      type: object
+      description: >
+        M10b application profile — the validated runtime contract for the M5 AiTM
+        proxy (docs/PROFILES/SCHEMA.md). version is a monotonic revision per
+        (tenant, name); spec is the canonical JSON of the validated document;
+        checksum is the sha256 hex of that canonical spec.
+      properties:
+        id:         { type: string, format: uuid }
+        tenant_id:  { type: string, format: uuid }
+        name:       { type: string }
+        version:    { type: integer }
+        spec:       { type: object, description: canonical JSON of the validated profile }
+        checksum:   { type: string, description: sha256 hex of the canonical spec }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProfileValidationProblem:
+      type: object
+      description: 400 body when a profile fails validation; violations carry the exact VALIDATION.md rule IDs.
+      properties:
+        type:   { type: string }
+        title:  { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              id:       { type: string, description: VALIDATION.md rule ID (e.g. AUTH-METHOD-REQUIRED) }
+              severity: { type: string, enum: [error, warn] }
+              message:  { type: string }
+              path:     { type: string }
     OSINTResult:
       type: object
       description: A stored OSINT collection (one per tenant+domain; recollect upserts).

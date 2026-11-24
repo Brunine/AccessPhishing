@@ -17,6 +17,7 @@ import (
 	"phishforge/internal/db"
 	"phishforge/internal/events"
 	"phishforge/internal/httpx"
+	"phishforge/internal/profiles"
 	"phishforge/internal/recipient"
 )
 
@@ -36,6 +37,11 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 		LandingURL       *string     `json:"landing_url"`
 		TemplateID       *uuid.UUID  `json:"template_id"`
 		SendingProfileID *uuid.UUID  `json:"sending_profile_id"`
+		// AppProfileID optionally binds the campaign to an M10b application
+		// profile. When set, the profile's auth/MFA method must be runtime-
+		// supported (else 409/501) and its checksum + version are frozen on the
+		// campaign at launch for forensic traceability.
+		AppProfileID *uuid.UUID `json:"app_profile_id"`
 	}
 	if !decode(w, r, &b) {
 		return
@@ -65,6 +71,38 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		profileChannel = prof.Channel
+	}
+
+	// Resolve + instantiate the bound application profile (M10b). A reserved
+	// auth/MFA method is storable but not launchable: refuse before touching
+	// recipient data, mirroring the engagement gate.
+	var appProfileChecksum string
+	var appProfileVersion int
+	if b.AppProfileID != nil {
+		ap, err := s.appProfiles.GetByID(r.Context(), s.pool, p.TenantID, *b.AppProfileID)
+		if err != nil {
+			httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "app_profile_id not found in tenant")
+			return
+		}
+		if err := profiles.InstantiateFlowJSON(ap.Spec); err != nil {
+			switch {
+			case errors.Is(err, profiles.ErrAuthMethodUnsupported):
+				httpx.Problem(w, r, http.StatusConflict, "conflict",
+					profiles.CodeAuthMethodUnsupported+": profile auth method is not supported at runtime (form/basic only)")
+			case errors.Is(err, profiles.ErrMFAMethodUnsupported):
+				httpx.Problem(w, r, http.StatusNotImplemented, "not implemented",
+					profiles.CodeMFAMethodUnsupported+": profile MFA mode is not supported at runtime (none/totp_field only)")
+			default:
+				httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "instantiate profile")
+			}
+			return
+		}
+		// The resolved profile's checksum is its stored canonical hash (the
+		// checksum column), computed once at import. Reading it back avoids a
+		// jsonb round-trip (which does not preserve key order), so the launch
+		// stamp is byte-stable against what the import returned.
+		appProfileChecksum = ap.Checksum
+		appProfileVersion = ap.Version
 	}
 
 	tx, err := s.pool.Begin(r.Context())
@@ -137,6 +175,13 @@ func (s *Server) launchCampaign(w http.ResponseWriter, r *http.Request) {
 	if err := s.campaigns.MarkScheduled(r.Context(), tx, p.TenantID, id, b.LandingURL, b.TemplateID, b.SendingProfileID); err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "schedule campaign")
 		return
+	}
+	// Freeze the launch-time profile stamp on the campaign (M10b ruling 3).
+	if b.AppProfileID != nil {
+		if err := s.campaigns.SetLaunchProfile(r.Context(), tx, p.TenantID, id, *b.AppProfileID, appProfileChecksum, appProfileVersion); err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "stamp campaign profile")
+			return
+		}
 	}
 	if err := audit.Write(r.Context(), tx, audit.Entry{
 		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,

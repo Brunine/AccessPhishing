@@ -55,8 +55,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
 - [~] M9 Secondary vectors (M9a SMS/smishing DONE; M9b QR/quishing, M9c
       collaboration channels, M9d MFA-fatigue still open; BitB injects declined)
 - [~] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
-      (M10a engine adapter done; M10b application-profile schema DESIGN done in
-      docs/PROFILES/ — Phase 3 impl + M5 proxy consumption still open)
+      (M10a engine adapter done; M10b application profiles — schema DESIGN +
+      Phase 3 runtime/validator/CRUD/checksum-stamping done; M5 proxy
+      consumption of the profile at request time still open)
 
 Victim state machine: sent → delivered → opened → clicked → creds → session_hijacked → post_exploitation
 
@@ -67,6 +68,71 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M10b Phase 3 — application profiles runtime (validator + CRUD +
+  checksum stamping). COMPLETE. Implements the Phase 2 contract: a tenant-owned,
+  versioned, validated profile library; a runtime instantiation gate; and
+  launch-time checksum stamping for forensic traceability. M5 proxy consumption
+  of the profile AT REQUEST TIME is still open (the ingest-side stamp + the
+  InstantiateFlow gate are in place for it to call). M5 NOT STARTED.
+- Done (M10b Phase 3):
+  - Migration 0021 (additive, no backfill): app_profiles (tenant-scoped,
+    UNIQUE(tenant_id, name, version) so revisions coexist; spec JSONB = canonical
+    JSON, checksum TEXT = sha256 hex, created_by FK ON DELETE RESTRICT,
+    updated_at trigger). ALSO adds campaigns.app_profile_id (FK ON DELETE SET
+    NULL so history survives a profile delete) + profile_checksum/profile_version
+    (the launch-time forensic stamp). .down.sql drops the columns + table.
+  - internal/profiles: validate.go implements EVERY docs/PROFILES/VALIDATION.md
+    rule with the exact rule IDs as error codes (Violation{id,severity,message,
+    path}; Result collects all in one pass; warnings don't block). ParseYAML
+    (64 KiB cap, map root, normalize), Canonicalize (json.Marshal = sorted keys
+    => stable), Checksum (sha256 hex), InstantiateFlow (RUNTIME gate: auth
+    method form/basic else ErrAuthMethodUnsupported=409 AUTH-METHOD-UNSUPPORTED;
+    mfa none/totp_field else ErrMFAMethodUnsupported=501 MFA-METHOD-UNSUPPORTED).
+    repository.go = stateless tenant-scoped CRUD; Create computes version N+1
+    atomically per (tenant,name). SECRETS-NO-CREDS is a case-insensitive key-name
+    denylist (password/passwd/secret/token/api_key/credential) over the WHOLE
+    doc incl. x-, exempting the two structural keys that contain "token"
+    (token_locations, token_query_key) — else the valid schema self-rejects.
+  - HTTP (operator, tenant-scoped, audited) /profiles: POST (JSON {spec_yaml}),
+    POST /import (raw YAML body), GET list, GET/PUT/DELETE {id}. Validation
+    failures => 400 with a violations[] array carrying the rule IDs. Audited
+    appprofile.import/update/delete.
+  - Launch integration: POST /campaigns/{id}/launch gained optional
+    app_profile_id. When set, the profile is resolved + InstantiateFlow'd BEFORE
+    touching recipients (409/501 on unsupported, mirroring the engagement gate),
+    and its STORED checksum + version are frozen onto the campaign in the launch
+    tx (campaign.SetLaunchProfile). Stored checksum is used (not recomputed from
+    the jsonb round-trip, which reorders keys).
+  - Event stamping (ruling 3): ingestEngineEvent copies the campaign's
+    launch-time profile_checksum/profile_version onto every creds /
+    session_hijacked event's metadata (campaign.ProfileStampByCampaignID).
+    Frozen at launch => a later profile import never rewrites an in-flight
+    campaign's stamp; existing events are never rewritten.
+  - RUNTIME GATE PRECEDENCE (deviation from the Phase 2 VALIDATION.md sketch,
+    per Phase 3 rulings 1&2): AUTH-METHOD-UNSUPPORTED / MFA-METHOD-UNSUPPORTED
+    are enforced at LAUNCH (409/501), NOT at import — so reserved-method
+    (oauth2_code/saml_post/ntlm) and push_intercept/custom profiles are STORABLE
+    but un-launchable. META-NAME-UNIQUE is the DB unique constraint (409), not a
+    validator rule.
+  - PRE-EXISTING BUG FIXED (needed for ruling 3): the public engine-events
+    route was registered as an ABSOLUTE "/api/v1/engines/{id}/events" INSIDE the
+    /api/v1 mount, doubling the prefix (/api/v1/api/v1/...) so the endpoint was
+    unreachable at the engine reporter's own ORCHESTRATOR_CALLBACK_URL (single
+    /api/v1/...). Changed to the relative "/engines/{id}/events". No other
+    behavior change; no engine test depended on the doubled path.
+  - OpenAPI 0.15.0: /profiles (+ /import, /{id}) paths, AppProfile +
+    ProfileValidationProblem schemas, app_profile_id on launch + 409/501.
+  - Tests: internal/profiles/validate_test.go (table-driven, one case per rule
+    ID incl. severities + warn-is-not-error; InstantiateFlow matrix;
+    checksum-stable-across-key-order; the committed owa.yaml validates clean +
+    instantiates). test/integration/profiles_test.go (import v1 JSON + v2 raw
+    N+1; invalid => 400 w/ AUTH-METHOD-REQUIRED; reserved oauth/push storable;
+    tenant isolation 404; launch 409 oauth / 501 push; happy launch stamps the
+    campaign [proof a]; creds event carries profile_checksum/version via the
+    real engine-events ingest [proof b]; profile update does NOT mutate a
+    launched campaign's frozen checksum [proof c]; audit counts). go build/vet
+    clean; gofmt-clean (my files; 3 pre-existing dirty files untouched); FULL
+    integration suite green incl. quishing (47s); dev Postgres up.
 - Milestone: M10b Phase 2 — Application Profile System schema. COMPLETE
   (DESIGN ONLY — no Go code, no migration, no handlers). Per-application
   "profiles" describing how to phish+proxy a target login surface (form/SSO/MFA

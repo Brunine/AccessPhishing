@@ -227,6 +227,20 @@ func (s *Server) ingestEngineEvent(r *http.Request, evType events.Type, token st
 	}
 	meta["source"] = "engine"
 
+	// Forensic stamp (M10b ruling 3): copy the campaign's launch-time profile
+	// checksum + version onto every creds / session_hijacked event. Frozen at
+	// launch, so a later profile import never changes an in-flight campaign's
+	// stamp. Best-effort: a campaign launched without a bound profile has no
+	// stamp and the keys are simply absent.
+	if cs, ver, perr := s.campaigns.ProfileStampByCampaignID(r.Context(), s.pool, rec.CampaignID); perr == nil {
+		if cs != nil {
+			meta["profile_checksum"] = *cs
+		}
+		if ver != nil {
+			meta["profile_version"] = *ver
+		}
+	}
+
 	ev := events.NewEvent{
 		TenantID:   rec.TenantID,
 		CampaignID: rec.CampaignID,
