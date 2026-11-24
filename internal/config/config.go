@@ -24,6 +24,8 @@ type Config struct {
 	EngineMaxRestarts int
 	EngineBackoff     time.Duration
 	EngineDataDir     string
+	// EngineHealthPollInterval is the worker's engine health heartbeat cadence.
+	EngineHealthPollInterval time.Duration
 
 	// Microsoft Graph delivery channel (all optional; missing => SMTP-only).
 	LoginBaseURL      string
@@ -80,6 +82,8 @@ func Load() (Config, error) {
 		EngineMaxRestarts: getenvInt("ENGINE_MAX_RESTARTS", 3),
 		EngineBackoff:     getenvDuration("ENGINE_BACKOFF", 1*time.Second),
 		EngineDataDir:     getenv("ENGINE_DATA_DIR", "data/engines"),
+
+		EngineHealthPollInterval: getenvDuration("ENGINE_HEALTH_POLL_INTERVAL", 30*time.Second),
 
 		LoginBaseURL:      getenv("LOGIN_BASE_URL", "https://login.microsoftonline.com"),
 		GraphBaseURL:      getenv("GRAPH_BASE_URL", "https://graph.microsoft.com"),

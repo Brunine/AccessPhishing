@@ -9,7 +9,9 @@ import (
 	"phishforge/internal/audit"
 	"phishforge/internal/auth"
 	"phishforge/internal/engine"
+	"phishforge/internal/engine/adapter"
 	"phishforge/internal/engineconfig"
+	"phishforge/internal/enginehealth"
 	"phishforge/internal/enginerepo"
 	"phishforge/internal/httpx"
 )
@@ -189,7 +191,19 @@ func (s *Server) startEngine(w http.ResponseWriter, r *http.Request) {
 		"/api/v1/engines/" + id.String() + "/events"
 	cfg.Env["ENGINE_ID"] = id.String()
 
-	err = s.engines.Start(id.String(), cfg)
+	// Route the launch through the adapter resolved from the engine's kind.
+	// With a supervisor wired, the builtin adapter is the registry fallback,
+	// so an unknown kind only surfaces when a strict (fallback-less) registry
+	// is configured — fail closed with 400 then.
+	ad, aerr := s.engineReg.Get(cfg.Kind)
+	if aerr != nil {
+		_ = s.engineRepo.ClearCallbackHash(r.Context(), s.pool, p.TenantID, id)
+		httpx.Problem(w, r, http.StatusBadRequest, "unsupported engine kind",
+			"no adapter registered for engine kind "+cfg.Kind)
+		return
+	}
+
+	err = ad.Start(r.Context(), id.String(), cfg)
 	switch {
 	case errors.Is(err, engine.ErrNoBinary):
 		_ = s.engineRepo.ClearCallbackHash(r.Context(), s.pool, p.TenantID, id)
@@ -218,6 +232,12 @@ func (s *Server) startEngine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.engineRepo.ClearError(r.Context(), s.pool, p.TenantID, id)
+
+	// Record the lifecycle transition in the health snapshot (best-effort: a
+	// snapshot write must never change the start response code).
+	h := ad.Health(r.Context(), id.String())
+	_ = s.engineHealth.RecordTransition(r.Context(), s.pool, p.TenantID, id,
+		ad.Kind(), string(h.Status), h.Detail, now)
 
 	if err := audit.Write(r.Context(), s.pool, audit.Entry{
 		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
@@ -260,18 +280,25 @@ func (s *Server) stopEngine(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusConflict, "conflict", "engine is not running")
 		return
 	}
-	_, live := s.engines.Status(id.String())
+	// Route the stop through the adapter resolved from the engine's kind.
+	ad := s.resolveEngineAdapter(e.Config)
+	if ad == nil {
+		httpx.Problem(w, r, http.StatusBadRequest, "unsupported engine kind",
+			"no adapter registered for this engine's kind")
+		return
+	}
+	live := ad.Health(r.Context(), id.String()).Live
 	if live {
-		if err := s.engines.Stop(id.String()); err != nil {
+		if err := ad.Stop(r.Context(), id.String()); err != nil {
 			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "stop engine: "+err.Error())
 			return
 		}
 		// Settle state after stop: clean exit => stopped, else stopped_failed.
 		newStatus := "stopped"
 		var lastErr *string
-		if st2, live2 := s.engines.Status(id.String()); live2 && st2.State == engine.StateFailed {
+		if h2 := ad.Health(r.Context(), id.String()); h2.Live && h2.Status == adapter.StatusFailed {
 			newStatus = "stopped_failed"
-			msg := st2.ExitErr
+			msg := h2.Detail
 			lastErr = &msg
 		}
 		e, err = s.engineRepo.SetStatus(r.Context(), s.pool, p.TenantID, id, newStatus, lastErr, nil)
@@ -286,6 +313,10 @@ func (s *Server) stopEngine(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "update engine status")
 		return
 	}
+
+	// Record the lifecycle transition in the health snapshot (best-effort).
+	_ = s.engineHealth.RecordTransition(r.Context(), s.pool, p.TenantID, id,
+		ad.Kind(), enginehealth.StatusForRow(e.Status), "stopped via adapter", time.Now().UTC())
 
 	// The stopped engine's token is dead; drop its hash so the ingest
 	// endpoint rejects late replays.
