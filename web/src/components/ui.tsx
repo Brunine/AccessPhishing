@@ -94,6 +94,15 @@ const STATE_STYLES: Record<string, string> = {
   active: "bg-emerald-900/60 text-emerald-200",
   expired: "bg-orange-900/60 text-orange-200",
   terminated: "bg-rose-950/70 text-rose-300",
+  // domain lifecycle statuses
+  candidate: "bg-slate-700 text-slate-300",
+  pending_purchase: "bg-slate-700 text-slate-300",
+  pending_verification: "bg-amber-900/60 text-amber-200",
+  verified: "bg-sky-900/60 text-sky-200",
+  suspended: "bg-orange-900/60 text-orange-200",
+  retired: "bg-slate-800 text-slate-400",
+  // domain assignment statuses
+  revoked: "bg-slate-800 text-slate-400",
 };
 
 export function Badge({ value }: { value: string }) {

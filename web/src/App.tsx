@@ -10,6 +10,7 @@ import Contacts from "./pages/Contacts";
 import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import Engagements from "./pages/Engagements";
+import Domains from "./pages/Domains";
 import Templates from "./pages/Templates";
 import SendingProfiles from "./pages/SendingProfiles";
 import Approvals from "./pages/Approvals";
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="/campaigns" element={<Campaigns />} />
         <Route path="/campaigns/:id" element={<CampaignDetail />} />
         <Route path="/engagements" element={<Engagements />} />
+        <Route path="/domains" element={<Domains />} />
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/templates" element={<Templates />} />
         <Route path="/sending-profiles" element={<SendingProfiles />} />

@@ -99,6 +99,110 @@ export interface EngagementInput {
   notes?: string | null;
 }
 
+export type DomainStatus =
+  | "candidate"
+  | "pending_purchase"
+  | "pending_verification"
+  | "verified"
+  | "authorized"
+  | "active"
+  | "suspended"
+  | "expired"
+  | "retired";
+
+export interface Domain {
+  id: string;
+  tenant_id: string;
+  name: string;
+  registrar?: string | null;
+  status: DomainStatus;
+  registered_at?: string | null;
+  expires_at?: string | null;
+  dns_provider?: string | null;
+  nameservers?: string[];
+  tls_status?: string | null;
+  notes?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DomainInput {
+  name: string;
+  registrar?: string | null;
+  status?: "candidate" | "pending_purchase" | "pending_verification";
+  registered_at?: string | null;
+  expires_at?: string | null;
+  dns_provider?: string | null;
+  nameservers?: string[];
+  notes?: string | null;
+}
+
+export interface DomainPatch {
+  registrar?: string | null;
+  status?: DomainStatus;
+  registered_at?: string | null;
+  expires_at?: string | null;
+  dns_provider?: string | null;
+  nameservers?: string[];
+  tls_status?: string | null;
+  notes?: string | null;
+}
+
+export type DomainAssignmentStatus = "pending" | "authorized" | "revoked";
+
+export interface DomainAssignment {
+  id: string;
+  tenant_id: string;
+  domain_id: string;
+  engagement_id: string;
+  status: DomainAssignmentStatus;
+  authorized_by?: string | null;
+  authorized_at?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DomainVerificationChallenge {
+  id: string;
+  hostname: string;
+  token: string;
+  txt_record: string;
+}
+
+export interface DomainVerificationCheck {
+  verified: boolean;
+  txt_records?: string[];
+  lookup_error?: string;
+}
+
+export interface DomainDiagnostics {
+  domain: string;
+  status: string;
+  dns: {
+    nameservers?: string[];
+    spf?: string;
+    dmarc?: string;
+    dkim?: string | null;
+    dkim_note?: string;
+  };
+  tls?: {
+    subject_cn?: string;
+    sans?: string[];
+    issuer?: string;
+    not_before?: string;
+    not_after?: string;
+    days_until_expiry?: number;
+    covers_domain?: boolean;
+  } | null;
+  ownership: {
+    verified: boolean;
+  };
+  warnings?: string[];
+  errors?: string[];
+}
+
 export interface Template {
   id: string;
   tenant_id: string;
