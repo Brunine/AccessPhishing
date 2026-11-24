@@ -1,8 +1,13 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.10.0
+  version: 0.11.0
   description: >
+    0.11.0 adds M8b/M8c domain inventory (/domains): manual import of externally
+    purchased domains, TXT-based ownership verification (_phishforge.<domain>),
+    assignment to engagements with a separate admin authorization step, a
+    verified -> active lifecycle, and live DNS/TLS diagnostics. Ownership
+    (verification) and authorization (assignment) are enforced independently.
     0.10.0 adds M8a engagements (/engagements): the authorization container for
     campaigns. A campaign must be bound to an authorized, unexpired,
     non-terminated engagement before it can be launched or sent (403 when
@@ -504,6 +509,283 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { description: Already terminated, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains:
+    post:
+      operationId: createDomain
+      summary: Manually import an externally purchased domain (operator)
+      description: >
+        Imports a domain into the inventory. name is lowercase-normalized and
+        validated as a bare domain. Lands in 'pending_verification' unless an
+        explicit status (candidate|pending_purchase|pending_verification) is
+        given for forward-compat. Ownership is established separately via TXT
+        verification.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DomainInput" }
+            example: { name: "phish-target.example", registrar: "namecheap" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Domain" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { description: Domain already exists for the tenant, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+    get:
+      operationId: listDomains
+      summary: List the caller's tenant domains, newest first (operator)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Domain" } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /domains/{id}:
+    get:
+      operationId: getDomain
+      summary: Get a domain in the caller's tenant (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Domain" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: patchDomain
+      summary: Edit domain metadata, with limited status transitions (operator)
+      description: >
+        Updates registrar/dates/dns_provider/nameservers/tls_status/notes. name
+        is not editable (it anchors the verification hostname). An optional
+        status change is limited to candidate->pending_purchase->pending_
+        verification and (active|verified)->expired (only when expires_at is in
+        the past); any other transition (including ->verified) is 409 — verified
+        is reachable only through TXT verification, and active/suspended/retired
+        through their dedicated endpoints.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DomainPatch" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Domain" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Status transition not permitted via PATCH, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+    delete:
+      operationId: deleteDomain
+      summary: Hard-delete a domain (operator) — not allowed while active
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: An active domain cannot be deleted, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/verification:
+    post:
+      operationId: createDomainVerification
+      summary: Issue a TXT ownership challenge (operator)
+      description: >
+        Generates an opaque token and returns the TXT record to publish at
+        _phishforge.<domain>. Any prior pending verification for the domain is
+        expired. Allowed only while the domain is 'pending_verification'.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DomainVerificationChallenge" }
+              example: { id: "…", hostname: "_phishforge.phish-target.example", token: "pf-domain-verify=…", txt_record: "pf-domain-verify=…" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Domain is not pending_verification, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/verification/{vid}/check:
+    post:
+      operationId: checkDomainVerification
+      summary: Check the published TXT record (operator)
+      description: >
+        Runs an exact-match TXT lookup against _phishforge.<domain>. On success
+        the verification is marked verified and the domain is promoted
+        pending_verification -> verified. On failure the verification is marked
+        failed and the raw TXT records found are returned for debugging (still
+        200). Re-checking a non-pending verification is 409.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: vid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verified:     { type: boolean }
+                  txt_records:  { type: array, items: { type: string } }
+                  lookup_error: { type: string }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Verification or domain not in the required state, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/assign:
+    post:
+      operationId: assignDomain
+      summary: Attach a verified domain to an engagement (operator)
+      description: >
+        Creates a pending assignment. The domain must be at least verified (409
+        otherwise) and the engagement must be same-tenant (400 otherwise) and
+        authorized/active (409 otherwise). An admin authorizes the assignment
+        separately.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [engagement_id]
+              properties:
+                engagement_id: { type: string, format: uuid }
+                notes:         { type: string, nullable: true }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/DomainAssignment" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Domain not verified, engagement not authorized, or already assigned, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/assignments:
+    get:
+      operationId: listDomainAssignments
+      summary: List a domain's engagement assignments (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/DomainAssignment" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /domains/{id}/assignments/{aid}/authorize:
+    post:
+      operationId: authorizeDomainAssignment
+      summary: Authorize a pending assignment (ADMIN) — pending -> authorized
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: aid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DomainAssignment" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Assignment not pending / already authorized, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/assignments/{aid}/revoke:
+    post:
+      operationId: revokeDomainAssignment
+      summary: Revoke an authorized assignment (ADMIN) — authorized -> revoked
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: aid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DomainAssignment" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Assignment not authorized, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/activate:
+    post:
+      operationId: activateDomain
+      summary: Activate a verified domain (ADMIN)
+      description: >
+        Requires the domain to be verified (or suspended, for reactivation) AND
+        at least one authorized assignment. verified|suspended -> active.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Domain" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Not activatable / no authorized assignment, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/suspend:
+    post:
+      operationId: suspendDomain
+      summary: Suspend an active domain (ADMIN) — active -> suspended
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Domain" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Not active, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/retire:
+    post:
+      operationId: retireDomain
+      summary: Retire a domain (ADMIN) — any non-terminal -> retired (terminal)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Domain" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Already retired, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /domains/{id}/diagnostics:
+    get:
+      operationId: domainDiagnostics
+      summary: Live DNS/TLS diagnostics for a domain (operator)
+      description: >
+        Read-only (no audit). Runs nameserver/SPF/DMARC lookups and a TLS
+        handshake on port 443 against the stored domain name only (never a
+        user-supplied host). DKIM is null (no selector configured yet). Lookup
+        failures populate errors[]; soft issues (e.g. missing SPF on a verified
+        domain) populate warnings[]; a non-resolving domain still returns 200.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DomainDiagnostics" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /activity:
     get:
@@ -1382,6 +1664,111 @@ components:
         created_by:       { type: string, format: uuid }
         created_at:       { type: string, format: date-time }
         updated_at:       { type: string, format: date-time }
+    DomainStatus:
+      type: string
+      description: >
+        Domain lifecycle status. candidate/pending_purchase are forward-compat
+        (M8d) import stages; manual import lands in pending_verification. verified
+        is reachable only via TXT verification. authorized/expired double as
+        reserved/derived labels; the stored path is pending_verification ->
+        verified -> active.
+      enum: [candidate, pending_purchase, pending_verification, verified, authorized, active, suspended, expired, retired]
+    DomainInput:
+      type: object
+      required: [name]
+      description: Manual-import body. Only name is required.
+      properties:
+        name:          { type: string, description: Lowercase-normalized bare domain, unique per tenant. }
+        registrar:     { type: string, nullable: true }
+        status:        { type: string, enum: [candidate, pending_purchase, pending_verification], description: Optional; defaults to pending_verification. }
+        registered_at: { type: string, format: date-time, nullable: true }
+        expires_at:    { type: string, format: date-time, nullable: true }
+        dns_provider:  { type: string, nullable: true }
+        nameservers:   { type: array, items: { type: string } }
+        notes:         { type: string, nullable: true }
+    DomainPatch:
+      type: object
+      description: Metadata + optional limited status change. name is not editable.
+      properties:
+        registrar:     { type: string, nullable: true }
+        status:        { $ref: "#/components/schemas/DomainStatus" }
+        registered_at: { type: string, format: date-time, nullable: true }
+        expires_at:    { type: string, format: date-time, nullable: true }
+        dns_provider:  { type: string, nullable: true }
+        nameservers:   { type: array, items: { type: string } }
+        tls_status:    { type: string, enum: [none, pending, valid, expiring, invalid], nullable: true }
+        notes:         { type: string, nullable: true }
+    Domain:
+      type: object
+      description: An inventory domain. Ownership (verification) and authorization (assignment) are independent.
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        name:          { type: string }
+        registrar:     { type: string, nullable: true }
+        status:        { $ref: "#/components/schemas/DomainStatus" }
+        registered_at: { type: string, format: date-time, nullable: true }
+        expires_at:    { type: string, format: date-time, nullable: true }
+        dns_provider:  { type: string, nullable: true }
+        nameservers:   { type: array, items: { type: string } }
+        tls_status:    { type: string, nullable: true }
+        notes:         { type: string, nullable: true }
+        created_by:    { type: string, format: uuid }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+    DomainAssignment:
+      type: object
+      description: Binds a domain to an engagement. Operator attaches (pending); admin authorizes.
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        domain_id:     { type: string, format: uuid }
+        engagement_id: { type: string, format: uuid }
+        status:        { type: string, enum: [pending, authorized, revoked] }
+        authorized_by: { type: string, format: uuid, nullable: true }
+        authorized_at: { type: string, format: date-time, nullable: true }
+        notes:         { type: string, nullable: true }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+    DomainVerificationChallenge:
+      type: object
+      description: The TXT record the operator must publish at hostname.
+      properties:
+        id:         { type: string, format: uuid }
+        hostname:   { type: string, description: Always _phishforge.<domain>. }
+        token:      { type: string, description: The full TXT value to publish. }
+        txt_record: { type: string, description: Same value as token (pf-domain-verify=<hex>). }
+    DomainDiagnostics:
+      type: object
+      description: Live DNS/TLS diagnostics result (read-only).
+      properties:
+        domain: { type: string }
+        status: { type: string }
+        dns:
+          type: object
+          properties:
+            nameservers: { type: array, items: { type: string } }
+            spf:         { type: string }
+            dmarc:       { type: string }
+            dkim:        { type: string, nullable: true }
+            dkim_note:   { type: string }
+        tls:
+          type: object
+          nullable: true
+          properties:
+            subject_cn:        { type: string }
+            sans:              { type: array, items: { type: string } }
+            issuer:            { type: string }
+            not_before:        { type: string, format: date-time }
+            not_after:         { type: string, format: date-time }
+            days_until_expiry: { type: integer }
+            covers_domain:     { type: boolean }
+        ownership:
+          type: object
+          properties:
+            verified: { type: boolean }
+        warnings: { type: array, items: { type: string } }
+        errors:   { type: array, items: { type: string } }
     ReportTotals:
       type: object
       description: >

@@ -18,6 +18,8 @@ import (
 	"phishforge/internal/campaign"
 	"phishforge/internal/contact"
 	"phishforge/internal/crypto"
+	"phishforge/internal/dnsdiag"
+	"phishforge/internal/domain"
 	"phishforge/internal/engagement"
 	"phishforge/internal/engine"
 	"phishforge/internal/enginerepo"
@@ -67,6 +69,10 @@ type Deps struct {
 	LLM      LLMClient
 	Engines  *engine.Manager
 	OSINT    OSINTClient
+	// Resolver backs the DNS diagnostics; nil uses the system resolver.
+	Resolver dnsdiag.Resolver
+	// DiagTimeout bounds each DNS/TLS lookup; zero defaults to 10s.
+	DiagTimeout time.Duration
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -81,6 +87,9 @@ type Server struct {
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
 	engagements  *engagement.Repository
+	domains      *domain.Repository
+	resolver     dnsdiag.Resolver
+	diagTimeout  time.Duration
 	contacts     *contact.Repository
 	groups       *group.Repository
 	suppressions *suppression.Repository
@@ -100,6 +109,14 @@ type Server struct {
 
 // NewServer constructs an API server from its dependencies.
 func NewServer(d Deps) *Server {
+	resolver := d.Resolver
+	if resolver == nil {
+		resolver = dnsdiag.DefaultResolver
+	}
+	diagTimeout := d.DiagTimeout
+	if diagTimeout <= 0 {
+		diagTimeout = 10 * time.Second
+	}
 	return &Server{
 		pool:         d.Pool,
 		baseURL:      d.BaseURL,
@@ -111,6 +128,9 @@ func NewServer(d Deps) *Server {
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
 		engagements:  engagement.NewRepository(),
+		domains:      domain.NewRepository(),
+		resolver:     resolver,
+		diagTimeout:  diagTimeout,
 		contacts:     contact.NewRepository(),
 		groups:       group.NewRepository(),
 		suppressions: suppression.NewRepository(),
@@ -187,6 +207,31 @@ func (s *Server) Router() http.Handler {
 				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/request-authorization", s.requestEngagementAuthorization)
 				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/authorize", s.authorizeEngagement)
 				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/terminate", s.terminateEngagement)
+			})
+
+			// M8b/M8c domain inventory: manual import, TXT ownership
+			// verification, assignment to engagements, and DNS/TLS diagnostics.
+			// CRUD + verification + assign + diagnostics are operator; the
+			// admin-gated actions (assignment authorize/revoke, activate,
+			// suspend, retire) are per-route so they coexist under one mount.
+			// Ownership (verification) and authorization (assignment authorize)
+			// are enforced independently.
+			r.Route("/domains", func(r chi.Router) {
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/", s.createDomain)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/", s.listDomains)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}", s.getDomain)
+				r.With(auth.RequireRole(auth.RoleOperator)).Patch("/{id}", s.patchDomain)
+				r.With(auth.RequireRole(auth.RoleOperator)).Delete("/{id}", s.deleteDomain)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/diagnostics", s.domainDiagnostics)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/verification", s.createDomainVerification)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/verification/{vid}/check", s.checkDomainVerification)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/assign", s.assignDomain)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/assignments", s.listDomainAssignments)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/assignments/{aid}/authorize", s.authorizeDomainAssignment)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/assignments/{aid}/revoke", s.revokeDomainAssignment)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/activate", s.activateDomain)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/suspend", s.suspendDomain)
+				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/retire", s.retireDomain)
 			})
 
 			// Dashboard activity feed: recent audit entries + events (operator).
