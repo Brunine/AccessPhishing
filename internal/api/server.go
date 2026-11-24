@@ -22,6 +22,8 @@ import (
 	"phishforge/internal/domain"
 	"phishforge/internal/engagement"
 	"phishforge/internal/engine"
+	"phishforge/internal/engine/adapter"
+	"phishforge/internal/enginehealth"
 	"phishforge/internal/enginerepo"
 	"phishforge/internal/events"
 	"phishforge/internal/group"
@@ -101,6 +103,8 @@ type Server struct {
 	keys         *apikey.Service
 	engines      *engine.Manager
 	engineRepo   *enginerepo.Repository
+	engineReg    *adapter.Registry
+	engineHealth *enginehealth.Repository
 	reports      *report.Repository
 	osint        OSINTClient
 	osintResults *osintresult.Repository
@@ -116,6 +120,17 @@ func NewServer(d Deps) *Server {
 	diagTimeout := d.DiagTimeout
 	if diagTimeout <= 0 {
 		diagTimeout = 10 * time.Second
+	}
+	// Engine adapter registry. The builtin local-subprocess adapter is the
+	// only driver this milestone; it is kind-agnostic, so it is installed as
+	// the fallback (resolves any engine kind). When no supervisor is wired
+	// (ENGINE_BINARY_PATH unset) the registry is empty and fails closed — but
+	// the start/stop handlers short-circuit to 503 before resolving anyway.
+	reg := adapter.NewRegistry()
+	if d.Engines != nil {
+		b := adapter.NewBuiltin(d.Engines)
+		reg.Register(b)
+		reg.SetFallback(b)
 	}
 	return &Server{
 		pool:         d.Pool,
@@ -142,6 +157,8 @@ func NewServer(d Deps) *Server {
 		keys:         apikey.NewService(d.Pool),
 		engines:      d.Engines,
 		engineRepo:   enginerepo.NewRepository(),
+		engineReg:    reg,
+		engineHealth: enginehealth.NewRepository(),
 		reports:      report.NewRepository(),
 		osint:        d.OSINT,
 		osintResults: osintresult.NewRepository(),
@@ -341,6 +358,7 @@ func (s *Server) Router() http.Handler {
 				r.Get("/{id}", s.getEngine)
 				r.Post("/{id}/start", s.startEngine)
 				r.Post("/{id}/stop", s.stopEngine)
+				r.Get("/{id}/health", s.engineHealthStatus)
 				r.Get("/{id}/logs", s.engineLogs)
 				r.Delete("/{id}", s.deleteEngine)
 			})

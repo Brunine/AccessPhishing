@@ -15,6 +15,7 @@ import (
 	"phishforge/internal/crypto"
 	"phishforge/internal/db"
 	"phishforge/internal/delivery"
+	"phishforge/internal/enginehealth"
 	"phishforge/internal/events"
 	"phishforge/internal/tasks"
 )
@@ -121,6 +122,30 @@ func main() {
 		}()
 		logger.Info("IMAP bounce poller started", "host", imapCfg.Host, "mailbox", imapCfg.Mailbox)
 	}
+
+	// Engine health poller: records a durable heartbeat (last_poll_at) and a
+	// best-effort status for every engine on a fixed cadence. Always on — it
+	// is a no-op when the inventory is empty. Mirrors the IMAP poller's
+	// goroutine-ticker pattern above.
+	healthPoller := enginehealth.NewPoller(pool)
+	go func() {
+		ticker := time.NewTicker(cfg.EngineHealthPollInterval)
+		defer ticker.Stop()
+		for {
+			n, err := healthPoller.PollOnce(ctx)
+			if err != nil {
+				logger.Error("engine health poll failed", "err", err)
+			} else if n > 0 {
+				logger.Info("engine health polled", "engines", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	logger.Info("engine health poller started", "interval", cfg.EngineHealthPollInterval)
 
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},

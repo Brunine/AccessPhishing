@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.11.0
+  version: 0.12.0
   description: >
     0.11.0 adds M8b/M8c domain inventory (/domains): manual import of externally
     purchased domains, TXT-based ownership verification (_phishforge.<domain>),
@@ -1462,19 +1462,49 @@ paths:
     post:
       operationId: startEngine
       summary: Start an engine (operator); 503 when ENGINE_BINARY_PATH is unset
+      description: >
+        Resolves the engine's adapter by the config `kind` and starts the
+        instance through it. In this build the kind-agnostic builtin
+        local-subprocess adapter is the registry fallback, so any kind
+        resolves; a strict (fallback-less) registry returns 400 for an
+        unregistered kind (fail-closed). 409 when already running, 503 when no
+        supervisor is wired.
       parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Engine" } } } }
+        "400": { description: Unsupported engine kind (no adapter registered), content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
         "409": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
   /engines/{id}/stop:
     post:
       operationId: stopEngine
       summary: Stop an engine (operator)
+      description: >
+        Stops the instance through its resolved adapter and records the
+        lifecycle transition in the health snapshot.
       parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Engine" } } } }
+        "400": { description: Unsupported engine kind (no adapter registered), content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
         "409": { $ref: "#/components/responses/Problem" }
+  /engines/{id}/health:
+    get:
+      operationId: engineHealth
+      summary: Engine runtime health/status (operator)
+      description: >
+        Read-only (not audited). Returns the adapter-reported health overlaid
+        on the persisted snapshot and the authoritative engine row: the
+        adapter-level status, the driving adapter kind, the declared engine
+        kind, the DB engine_status, last transition time (set on start/stop),
+        and last poll time (set by the worker's periodic health poller).
+        `live` is true when this API instance currently supervises the process;
+        otherwise status falls back to the snapshot, then to the engine row.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EngineHealth" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /engines/{id}/logs:
     get:
       operationId: engineLogs
@@ -2003,6 +2033,24 @@ components:
         started_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    EngineHealth:
+      type: object
+      description: >
+        Runtime health for one engine. The adapter-level status vocabulary is
+        distinct from the engine_status enum: it is what the driving adapter
+        reports about the live instance, mapped onto a durable snapshot.
+      properties:
+        engine_id:          { type: string, format: uuid }
+        status:             { type: string, enum: [unknown, starting, running, stopped, failed], description: Adapter-reported health. }
+        detail:             { type: string, description: Adapter-reported detail (e.g. pid, exit error). }
+        live:               { type: boolean, description: True when this API instance supervises the process. }
+        adapter_kind:       { type: string, description: The driving adapter (builtin in this build). }
+        engine_kind:        { type: string, description: The kind declared in the engine config. }
+        engine_status:      { type: string, enum: [stopped, starting, running, error, stopped_failed], description: Authoritative DB engine status. }
+        last_transition_at: { type: string, format: date-time, nullable: true, description: Last start/stop transition. }
+        last_poll_at:       { type: string, format: date-time, nullable: true, description: Last worker health-poll tick. }
+        started_at:         { type: string, format: date-time, nullable: true }
+        last_error:         { type: string, nullable: true }
     Approval:
       type: object
       properties:
