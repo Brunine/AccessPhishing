@@ -1,8 +1,15 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.13.0
+  version: 0.14.0
   description: >
+    0.14.0 adds M9b QR / quishing: a per-campaign `channel` (email|qr, default
+    email), a `scanned` victim-state-machine step that slots in before clicked
+    (scanned -> clicked -> creds -> ...), GET /campaigns/{id}/qrcodes returning
+    per-recipient QR-code PNGs (base64, on the fly — no storage; audited
+    qrcode.view), and a `scanned` report count + scanned_at drilldown timestamp.
+    A qr-channel campaign's first /t/{token} hit records scanned then clicked;
+    the scan event is on the qr channel, the click on email (like every click).
     0.13.0 adds M8d domain intelligence & procurement: engagement-scoped domain
     candidate discovery (POST /engagements/{id}/candidates/collect, async),
     deterministic ranking with registrar price comparison (GET
@@ -154,13 +161,20 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
+                channel:
+                  type: string
+                  enum: [email, qr]
+                  default: email
+                  description: >
+                    Delivery vector (M9b). Omit or 'email' for the standard
+                    email/SMS flow; 'qr' for quishing. Any other value is 400.
                 engagement_id:
                   type: string
                   format: uuid
                   description: >
                     Optional authorizing engagement (same tenant, 400 otherwise).
                     Required to be authorized/unexpired before launch or send.
-            example: { name: "Q4 Awareness Sim", engagement_id: "…" }
+            example: { name: "Q4 Awareness Sim", channel: "qr", engagement_id: "…" }
       responses:
         "201":
           description: Created
@@ -306,6 +320,40 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /campaigns/{id}/qrcodes:
+    get:
+      operationId: campaignQRCodes
+      summary: Per-recipient QR codes of the tracking URLs (operator)
+      description: >
+        M9b quishing. Returns one QR-code artifact per recipient — each
+        recipient's /t/{token} tracking URL encoded as a PNG, base64'd inline
+        (qr_png_base64 + a ready-to-render data_uri). Generated on the fly from
+        the campaign's recipients; nothing is stored. Read-but-audited
+        (qrcode.view), like the report exports. Works for any campaign, but is
+        intended for qr-channel campaigns: the operator prints/embeds the codes
+        and uses them manually (there is no QR auto-send). Image size and EC
+        level come from QR_SIZE / QR_EC_LEVEL. PDF/zip assembly is out of scope.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  campaign_id: { type: string, format: uuid }
+                  channel:     { type: string, enum: [email, qr] }
+                  size:        { type: integer, description: QR PNG edge in pixels }
+                  ec_level:    { type: string, enum: [L, M, Q, H] }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/QRCodeEntry" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /campaigns/{id}/send:
     post:
       operationId: sendCampaign
@@ -379,8 +427,9 @@ paths:
       summary: Flat per-recipient drilldown export (operator)
       description: >
         Read-only (M8). One row per recipient with current state and first-seen
-        stage timestamps (sent/delivered/opened/clicked/creds/session_hijacked).
-        No captured credentials or session material are included.
+        stage timestamps (sent/delivered/opened/scanned/clicked/creds/
+        session_hijacked). scanned_at is populated for QR scans (M9b). No
+        captured credentials or session material are included.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -1750,6 +1799,14 @@ components:
         tenant_id:   { type: string, format: uuid }
         name:        { type: string }
         status:      { $ref: "#/components/schemas/CampaignStatus" }
+        channel:
+          type: string
+          enum: [email, qr]
+          description: >
+            Delivery vector. 'email' (default; SMS campaigns are also 'email' at
+            the campaign level — their SMS-ness comes from the bound sending
+            profile) or 'qr' (M9b quishing). A qr campaign's first /t/{token} hit
+            records a scanned event before the click.
         landing_url: { type: string, nullable: true }
         template_id:         { type: string, format: uuid, nullable: true }
         sending_profile_id:  { type: string, format: uuid, nullable: true }
@@ -1769,6 +1826,20 @@ components:
         created_by:  { type: string, format: uuid }
         created_at:  { type: string, format: date-time }
         updated_at:  { type: string, format: date-time }
+    QRCodeEntry:
+      type: object
+      description: >
+        One recipient's QR artifact (M9b). The recipient's /t/{token} tracking
+        URL encoded as a PNG QR code, base64'd inline. Generated on the fly — no
+        image is stored. qr_png_base64 is the raw base64; data_uri wraps it as
+        data:image/png;base64,… for direct <img> rendering.
+      properties:
+        recipient_id:  { type: string, format: uuid }
+        contact_id:    { type: string, format: uuid }
+        token:         { type: string }
+        click_url:     { type: string, description: The encoded tracking URL. }
+        qr_png_base64: { type: string, description: Base64 of the PNG QR image. }
+        data_uri:      { type: string, description: "data:image/png;base64,<qr_png_base64>" }
     EngagementStatus:
       type: string
       description: >
@@ -1984,14 +2055,21 @@ components:
       type: object
       description: >
         Funnel counts over recipients. Each linear field counts recipients that
-        reached that stage or beyond (the successful path); bounced/failed are
-        reported separately and are not part of the funnel.
+        reached that stage or beyond (the successful path); bounced/failed/scanned
+        are reported separately and are not part of the funnel.
       properties:
         recipients:        { type: integer }
         pending:           { type: integer }
         sent:              { type: integer }
         delivered:         { type: integer }
         opened:            { type: integer }
+        scanned:
+          type: integer
+          description: >
+            Recipients currently resting at 'scanned' — a QR scan (M9b) with no
+            click yet. The common scan→click flow lands on 'clicked', so the
+            richer per-scan signal is in the timeline (scanned event counts) and
+            the per-recipient drilldown (scanned_at). Not a linear funnel stage.
         clicked:           { type: integer }
         creds:             { type: integer }
         session_hijacked:  { type: integer }

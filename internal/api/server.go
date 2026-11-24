@@ -33,6 +33,7 @@ import (
 	"phishforge/internal/osintclient"
 	"phishforge/internal/osintresult"
 	"phishforge/internal/prompttpl"
+	"phishforge/internal/qr"
 	"phishforge/internal/recipient"
 	"phishforge/internal/report"
 	"phishforge/internal/sendingprofile"
@@ -79,6 +80,10 @@ type Deps struct {
 	Resolver dnsdiag.Resolver
 	// DiagTimeout bounds each DNS/TLS lookup; zero defaults to 10s.
 	DiagTimeout time.Duration
+	// QRSize is the QR-code PNG edge in pixels; zero defaults to qr.DefaultSize.
+	QRSize int
+	// QRECLevel is the QR error-correction level (L|M|Q|H); empty defaults to M.
+	QRECLevel string
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -97,6 +102,8 @@ type Server struct {
 	candidates   *candidate.Repository
 	resolver     dnsdiag.Resolver
 	diagTimeout  time.Duration
+	qrSize       int
+	qrECLevel    string
 	contacts     *contact.Repository
 	groups       *group.Repository
 	suppressions *suppression.Repository
@@ -126,6 +133,14 @@ func NewServer(d Deps) *Server {
 	if diagTimeout <= 0 {
 		diagTimeout = 10 * time.Second
 	}
+	qrSize := d.QRSize
+	if qrSize <= 0 {
+		qrSize = qr.DefaultSize
+	}
+	qrECLevel := d.QRECLevel
+	if qrECLevel == "" {
+		qrECLevel = "M"
+	}
 	// Engine adapter registry. The builtin local-subprocess adapter is the
 	// only driver this milestone; it is kind-agnostic, so it is installed as
 	// the fallback (resolves any engine kind). When no supervisor is wired
@@ -152,6 +167,8 @@ func NewServer(d Deps) *Server {
 		candidates:   candidate.NewRepository(),
 		resolver:     resolver,
 		diagTimeout:  diagTimeout,
+		qrSize:       qrSize,
+		qrECLevel:    qrECLevel,
 		contacts:     contact.NewRepository(),
 		groups:       group.NewRepository(),
 		suppressions: suppression.NewRepository(),
@@ -207,6 +224,8 @@ func (s *Server) Router() http.Handler {
 				r.Patch("/{id}", s.patchCampaign)
 				r.Post("/{id}/launch", s.launchCampaign)
 				r.Get("/{id}/links", s.campaignLinks)
+				// M9b quishing: per-recipient QR codes of the tracking URLs.
+				r.Get("/{id}/qrcodes", s.campaignQRCodes)
 				r.Get("/{id}/targets", s.campaignTargets)
 				r.Post("/{id}/send", s.sendCampaign)
 				r.Post("/{id}/engine", s.bindEngine)

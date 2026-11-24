@@ -55,6 +55,11 @@ type Config struct {
 	// DNS/TLS diagnostics (domain inventory). Bounds each lookup/dial.
 	DNSDiagTimeout time.Duration
 
+	// QR / quishing (M9b): on-the-fly QR-code rendering of per-recipient
+	// tracking URLs. Size is the PNG edge in pixels; EC level is L|M|Q|H.
+	QRSize    int
+	QRECLevel string
+
 	// M8d domain candidate discovery + registrar price comparison. Porkbun is
 	// always available (public pricing API). Namecheap/Cloudflare are optional:
 	// absent credentials/URL leave that adapter out of the comparison.
@@ -121,6 +126,9 @@ func Load() (Config, error) {
 		OSINTTimeout: getenvDuration("OSINT_TIMEOUT", 30*time.Second),
 
 		DNSDiagTimeout: getenvDuration("DNS_DIAG_TIMEOUT", 10*time.Second),
+
+		QRSize:    getenvInt("QR_SIZE", 256),
+		QRECLevel: getenv("QR_EC_LEVEL", "M"),
 
 		RegistrarTimeout:       getenvDuration("REGISTRAR_TIMEOUT", 15*time.Second),
 		PorkbunBaseURL:         getenv("PORKBUN_BASE_URL", "https://api.porkbun.com"),

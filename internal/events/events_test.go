@@ -113,6 +113,9 @@ func TestEmailBoundaryCases(t *testing.T) {
 }
 
 func TestNonEmailChannelsFailClosed(t *testing.T) {
+	// allTypes does not include TypeScanned, so every type here is unknown on
+	// the non-email channels — including qr, whose sole catalogued type is
+	// scanned. The qr-scanned positive path is covered in TestQRScanTransitions.
 	for _, ch := range []Channel{ChannelSMS, ChannelQR, ChannelAuth, ChannelSystem} {
 		for _, ev := range allTypes {
 			_, _, err := nextState(StatePending, ev, ch)
@@ -127,12 +130,53 @@ func TestNonEmailChannelsFailClosed(t *testing.T) {
 	}
 }
 
+// TestQRScanTransitions covers the M9b scanned step: it is valid on the QR
+// channel from a pre-click state, advances to scanned, and composes with a
+// following email-channel clicked (the cross-channel forward transition). A
+// scan after a click is a no-op regression; a qr-channel clicked (and any other
+// type) still fails closed because the qr catalog holds scanned only.
+func TestQRScanTransitions(t *testing.T) {
+	// scanned on the QR channel from pending advances to scanned.
+	if gs, ga, err := nextState(StatePending, TypeScanned, ChannelQR); err != nil || gs != StateScanned || !ga {
+		t.Fatalf("qr scanned from pending: got (%s,%v,%v), want (scanned,true,nil)", gs, ga, err)
+	}
+	// The click the scan triggers is recorded on the email channel and advances
+	// from scanned -> clicked (global rank ordering makes this valid).
+	if gs, ga, err := nextState(StateScanned, TypeClicked, ChannelEmail); err != nil || gs != StateClicked || !ga {
+		t.Fatalf("scanned->clicked (email): got (%s,%v,%v), want (clicked,true,nil)", gs, ga, err)
+	}
+	// A scan arriving after the click is a late signal: rejected as a no-op, so
+	// a second /t hit never records a duplicate scanned.
+	if _, _, err := nextState(StateClicked, TypeScanned, ChannelQR); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("scan after click: want ErrInvalidTransition, got %v", err)
+	}
+	// A direct click with no scan remains valid (not every click is a QR scan).
+	if gs, _, err := nextState(StatePending, TypeClicked, ChannelEmail); err != nil || gs != StateClicked {
+		t.Fatalf("direct click: got (%s,%v), want (clicked,nil)", gs, err)
+	}
+	// clicked on the QR channel is NOT catalogued — fails closed.
+	if _, _, err := nextState(StateScanned, TypeClicked, ChannelQR); !errors.Is(err, ErrUnknownChannelEvent) {
+		t.Fatalf("qr clicked: want ErrUnknownChannelEvent, got %v", err)
+	}
+}
+
 func TestCatalogShape(t *testing.T) {
 	// email has one entry per stateForType type plus reported.
 	if got, want := len(catalog[ChannelEmail]), len(stateForType)+1; got != want {
 		t.Fatalf("email catalog size: got %d want %d", got, want)
 	}
-	for _, ch := range []Channel{ChannelSMS, ChannelQR, ChannelAuth, ChannelSystem} {
+	// email never produces scanned: that event originates on the QR channel.
+	if _, ok := catalog[ChannelEmail][TypeScanned]; ok {
+		t.Fatal("email catalog should not contain scanned")
+	}
+	// qr (M9b) holds exactly one entry — scanned, a linear step before clicked.
+	if got := len(catalog[ChannelQR]); got != 1 {
+		t.Fatalf("qr catalog size: got %d want 1", got)
+	}
+	if sp := catalog[ChannelQR][TypeScanned]; sp.kind != kindLinear || sp.projects != StateScanned || sp.rank != linearRank[StateScanned] {
+		t.Fatalf("qr scanned spec wrong: %+v", sp)
+	}
+	for _, ch := range []Channel{ChannelSMS, ChannelAuth, ChannelSystem} {
 		if len(catalog[ch]) != 0 {
 			t.Fatalf("channel %q catalog should be empty, got %d entries", ch, len(catalog[ch]))
 		}

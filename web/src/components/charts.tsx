@@ -6,6 +6,7 @@ const STATE_COLOR: Record<string, string> = {
   sent: "#38bdf8",
   delivered: "#0ea5e9",
   opened: "#818cf8",
+  scanned: "#22d3ee",
   clicked: "#a78bfa",
   creds: "#fb7185",
   session_hijacked: "#f43f5e",
@@ -55,9 +56,10 @@ export function FunnelChart({ totals }: { totals: ReportTotals }) {
           </div>
         );
       })}
-      {(totals.bounced > 0 || totals.failed > 0 || totals.pending > 0) && (
+      {(totals.bounced > 0 || totals.failed > 0 || totals.pending > 0 || totals.scanned > 0) && (
         <div className="pt-1 text-xs text-slate-500">
           {totals.pending} pending · {totals.bounced} bounced · {totals.failed} failed
+          {totals.scanned > 0 ? ` · ${totals.scanned} scanned (QR, no click yet)` : ""}
           {" "}(of {totals.recipients} recipients)
         </div>
       )}
@@ -71,7 +73,7 @@ export function TimelineChart({ timeline }: { timeline: TimelineBucket[] }) {
     return <div className="text-sm text-slate-500">No events yet.</div>;
   }
   // Event types present, in a stable funnel-ish order.
-  const order = ["sent", "delivered", "opened", "clicked", "creds", "session_hijacked", "post_exploitation", "bounced", "failed", "reported"];
+  const order = ["sent", "delivered", "opened", "scanned", "clicked", "creds", "session_hijacked", "post_exploitation", "bounced", "failed", "reported"];
   const present = order.filter((t) => timeline.some((b) => (b.counts[t] ?? 0) > 0));
 
   const totals = timeline.map((b) => present.reduce((s, t) => s + (b.counts[t] ?? 0), 0));
