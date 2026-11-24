@@ -35,10 +35,12 @@ import (
 	"phishforge/internal/tenant"
 )
 
-// fakeEnqueuer records campaign-send enqueues instead of touching Redis.
+// fakeEnqueuer records campaign-send and candidate-collect enqueues instead of
+// touching Redis.
 type fakeEnqueuer struct {
-	mu    sync.Mutex
-	sends []uuid.UUID
+	mu         sync.Mutex
+	sends      []uuid.UUID
+	candidates []uuid.UUID
 }
 
 func (f *fakeEnqueuer) EnqueueCampaignSend(_ context.Context, _ uuid.UUID, campaignID uuid.UUID) error {
@@ -48,10 +50,23 @@ func (f *fakeEnqueuer) EnqueueCampaignSend(_ context.Context, _ uuid.UUID, campa
 	return nil
 }
 
+func (f *fakeEnqueuer) EnqueueCandidateCollect(_ context.Context, _ uuid.UUID, engagementID uuid.UUID, _ uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.candidates = append(f.candidates, engagementID)
+	return nil
+}
+
 func (f *fakeEnqueuer) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.sends)
+}
+
+func (f *fakeEnqueuer) candidateCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.candidates)
 }
 
 // newAPI builds an httptest server with a real cipher and a fake enqueuer.

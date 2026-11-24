@@ -101,6 +101,46 @@ class GenerateResponse(BaseModel):
     candidates: list[Candidate]
 
 
+# --- suggest (generation + availability in one call) ---
+
+class SuggestRequest(BaseModel):
+    domain: str
+    modes: list[FuzzMode] = Field(default_factory=lambda: list(DEFAULT_MODES))
+    limit: int = Field(default=50, ge=1, le=200)
+
+    @field_validator("domain")
+    @classmethod
+    def _v(cls, v: str) -> str:
+        return _normalize_domain(v)
+
+    @field_validator("modes")
+    @classmethod
+    def _m(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("at least one mode is required")
+        seen: set[str] = set()
+        out: list[str] = []
+        for m in v:
+            if m not in seen:
+                seen.add(m)
+                out.append(m)
+        return out
+
+
+class SuggestCandidate(BaseModel):
+    domain: str
+    fuzzer: str
+    available: Optional[bool] = None
+    status_code: Optional[int] = None
+
+
+class SuggestResponse(BaseModel):
+    domain: str
+    count: int
+    truncated: bool
+    candidates: list[SuggestCandidate]
+
+
 # --- availability ---
 
 class DomainListRequest(BaseModel):

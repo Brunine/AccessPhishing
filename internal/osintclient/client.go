@@ -40,6 +40,16 @@ type AvailabilityResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
+// SuggestCandidate is a lookalike candidate annotated with RDAP availability,
+// as returned by the service's /domains/suggest endpoint (generation +
+// availability in one call, for the M8d candidate pipeline).
+type SuggestCandidate struct {
+	Domain     string `json:"domain"`
+	Fuzzer     string `json:"fuzzer"`
+	Available  *bool  `json:"available"`
+	StatusCode *int   `json:"status_code,omitempty"`
+}
+
 // Result is the aggregated collection for a domain. It composes the service's
 // own response shapes (subdomains, lookalike candidates, RDAP availability).
 type Result struct {
@@ -134,6 +144,27 @@ type generateResp struct {
 
 type availabilityResp struct {
 	Results []AvailabilityResult `json:"results"`
+}
+
+type suggestResp struct {
+	Domain     string             `json:"domain"`
+	Count      int                `json:"count"`
+	Truncated  bool               `json:"truncated"`
+	Candidates []SuggestCandidate `json:"candidates"`
+}
+
+// Suggest returns lookalike candidates for a seed domain, each annotated with
+// RDAP availability (one call that generates and availability-checks). It is the
+// discovery input for the M8d candidate pipeline; the orchestrator never
+// generates or scans itself.
+func (c *Client) Suggest(ctx context.Context, domain string) ([]SuggestCandidate, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	var resp suggestResp
+	if err := c.do(ctx, http.MethodPost, "/domains/suggest", map[string]any{"domain": domain}, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Candidates, nil
 }
 
 // Collect runs the passive aggregation pipeline for a domain: subdomain
