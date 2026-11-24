@@ -151,7 +151,8 @@ LIMIT $2`, tenantID, limit)
 		// the NDR is still marked processed so it is not retried forever).
 		_, _ = r.events.Append(ctx, events.NewEvent{
 			TenantID: tenantID, CampaignID: campaignID, ContactID: contactID,
-			Type: events.TypeBounced, Metadata: map[string]any{"email": pr.recipientEmail, "source": "ndr"},
+			Type: events.TypeBounced, Channel: events.ChannelEmail,
+			Metadata: map[string]any{"email": pr.recipientEmail, "source": "ndr"},
 		})
 		if _, err := pool.Exec(ctx, `UPDATE ndr_messages SET status='processed', processed_at=now() WHERE id=$1`, pr.id); err != nil {
 			return processed, skipped, fmt.Errorf("bounce: mark processed: %w", err)

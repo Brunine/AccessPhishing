@@ -290,6 +290,7 @@ func (s *Server) recordTracking(r *http.Request, rec recipient.Recipient, t even
 		CampaignID: rec.CampaignID,
 		ContactID:  rec.ContactID,
 		Type:       t,
+		Channel:    events.ChannelEmail,
 		Metadata: map[string]any{
 			"ip": clientIP(r),
 			"ua": r.UserAgent(),

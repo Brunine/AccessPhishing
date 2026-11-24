@@ -53,6 +53,15 @@ rest of the platform runs normally.
 - **Events** are the append-only source of truth. Each append validates a
   monotonic transition and updates the derived `campaign_targets.state` in the
   same transaction.
+- **Channel dimension (taxonomy v2).** Every event carries a `channel`
+  (`email` / `sms` / `qr` / `auth` / `system`; default `email`). Validation is
+  driven by a Go-side catalog — `map[channel]map[type]spec` — derived for the
+  email channel from the same rank/state maps that have always governed the
+  funnel, so email behavior is unchanged. The catalog **fails closed**: a
+  `(channel, type)` pair with no entry is rejected (`ErrUnknownChannelEvent`)
+  and never recorded. Non-email channels are intentionally empty today;
+  SMS/QR/auth event types are added to the catalog (and the `event_type` enum)
+  in M9a/M9b, not here.
 - **Reporting** aggregates events + `campaign_targets` into funnel counts,
   rates, timelines and a per-recipient drilldown — read-only, no secret
   material — exposed as JSON, CSV, and executive PDF.
