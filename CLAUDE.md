@@ -65,6 +65,107 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M8b + M8c-lite — domain inventory, manual import & DNS/TLS
+  diagnostics. COMPLETE. Centralized inventory of externally purchased domains
+  (NO registrar API / NO automated purchasing — operators import manually),
+  TXT-based ownership verification, assignment to engagements with a separate
+  admin authorization step, a verified->active lifecycle, and live DNS/TLS
+  diagnostics. KEY INVARIANT: ownership (verification) and authorization
+  (assignment) are enforced INDEPENDENTLY — a domain may be verified but
+  authorized for no engagement, and vice versa.
+- Done (M8b/M8c domains):
+  - Migration 0017: domain_status enum (candidate|pending_purchase|
+    pending_verification|verified|authorized|active|suspended|expired|retired);
+    domains (tenant-scoped, UNIQUE(tenant,name), nameservers TEXT[], tls_status
+    CHECK, created_by FK, set_updated_at trigger); domain_assignments (FK
+    domain+engagement ON DELETE CASCADE, status CHECK pending|authorized|
+    revoked, UNIQUE(domain_id,engagement_id)); domain_verifications (opaque
+    UNIQUE token, hostname, expected_value, status CHECK, idx(domain_id,status)).
+    tenant_id indexes + clean .down.sql (drops tables + enum).
+  - internal/dnsdiag (stdlib only): Resolver interface (satisfied by
+    *net.Resolver; DefaultResolver). TXT/CheckOwnership(exact match + returns
+    raw records)/SPF/DMARC/DKIM(selector, chunk-join)/Nameservers(trailing-dot
+    strip). TLS(host,port,timeout) via crypto/tls with InsecureSkipVerify
+    (DIAGNOSTIC inspection, not trust validation — documented) over an
+    overridable tlsDialContext; pure certToInfo + sansCoverDomain (RFC-6125
+    one-label wildcard) table-tested. Hard timeouts on every call; no HTTP, no
+    shell-outs. Unit tests use a fake resolver + injected cert (no network).
+  - internal/domain: Status/AssignmentStatus/VerificationStatus consts;
+    sentinels (ErrNotFound/ErrInvalidTransition/ErrDomainNotVerified/
+    ErrAssignmentAlreadyAuthorized). Single `allowed` transition map = source of
+    truth; exported guards CanRequestVerification/CanMarkVerified/CanAuthorize/
+    CanAssign/CanActivate(verified|suspended)/CanSuspend/CanRetire/CanExpire(now,
+    needs past expires_at)/CanDelete(not active). ValidName (lowercase bare
+    domain, mirrors engagement scope regex) + NormalizeName + ValidCreateStatus
+    (candidate/pending_purchase/pending_verification only). Stateless
+    tenant-scoped repo over db.Querier: Create/GetByID/List/Update/SetStatus/
+    Delete; Assign/GetAssignment/ListAssignments/CountAuthorizedAssignments/
+    SetAssignmentStatus; ExpirePendingVerifications/CreateVerification/
+    GetVerification/MarkVerificationResult. Unit tests: full transition matrix
+    (independent expected map), per-status guard table, CanExpire/CanDelete,
+    ValidName/ValidCreateStatus.
+  - HTTP (tenant-scoped, audited) /domains: POST create (operator; manual
+    import -> pending_verification, name normalized+validated 400),
+    GET list/GET {id} (operator), PATCH {id} (operator; metadata + PATCH-only
+    status set {candidate->pending_purchase->pending_verification,
+    (active|verified)->expired when past} else 409 — ->verified unreachable via
+    PATCH), DELETE {id} (operator; 409 from active), POST {id}/verification
+    (operator; expires prior pending, returns hostname _phishforge.<domain> +
+    pf-domain-verify=<32B hex> TXT), POST {id}/verification/{vid}/check
+    (operator; exact TXT match -> verified + promote pending_verification->
+    verified, else failed + returns raw txt_records; both audited), POST
+    {id}/assign (operator; domain >=verified 409, same-tenant engagement 400,
+    engagement authorized/active 409, dup 409), GET {id}/assignments (operator),
+    POST {id}/assignments/{aid}/authorize + /revoke (ADMIN; pending->authorized
+    w/ actor+ts, authorized->revoked; already-authorized ->
+    ErrAssignmentAlreadyAuthorized 409), POST {id}/activate (ADMIN; requires
+    >=1 authorized assignment AND verified|suspended -> active 409 else), POST
+    {id}/suspend + /retire (ADMIN). GET {id}/diagnostics (operator; read-only,
+    NO audit — mirrors report endpoints) returns {dns:{nameservers,spf,dmarc,
+    dkim:null+note}, tls:{...}|null, ownership:{verified}, warnings[], errors[]}
+    — lookup failures => errors (200, never 500), soft issues => warnings.
+    Shared skeletons: domainTransition (admin status actions + optional
+    precheck) + domainAssignmentDecision. parseUUIDParam helper for {vid}/{aid}.
+  - SECURITY: verification tokens crypto/rand 32B hex, audit stores the
+    verification row id (never the token); all queries parameterized +
+    tenant-scoped (foreign ids => 400 body / 404 path); diagnostics + TXT check
+    dial ONLY the stored domain name (_phishforge.<domain> for the check; the
+    bare name on 443 for TLS) — never a user-supplied host, documented as SSRF/
+    port-scan safe; admin-only authorize/activate/suspend/retire enforced by
+    per-route RequireRole(admin), not client gating.
+  - config: DNS_DIAG_TIMEOUT (default 10s; bare int=seconds or Go duration),
+    wired api.Deps.DiagTimeout + Resolver (nil => system resolver). .env.example
+    documents it. cmd/api passes cfg.DNSDiagTimeout.
+  - OpenAPI 0.11.0: 12 /domains paths + Domain/DomainInput/DomainPatch/
+    DomainStatus/DomainAssignment/DomainVerificationChallenge/DomainDiagnostics
+    schemas. Parses as valid YAML.
+  - Tests: internal/dnsdiag + internal/domain unit tests (above);
+    test/integration/domains_test.go — TestDomainInventoryLifecycle (import+
+    normalize, dup 409, PATCH->verified 409, assign-before-verify 409, create
+    verification, check-with-no-record failed(200,verified:false), recheck 409,
+    assign (seed verified via SQL — system resolver can't satisfy a live TXT),
+    dup assign 409, activate-w/o-authz-assignment 409, operator authorize 403,
+    admin authorize 200, re-authorize 409, activate 200, delete-active 409,
+    suspend+retire, suspend-after-retire 409, diagnostics structured errors +
+    dkim null, audit counts), TestDomainVerificationPromotion (injected stub
+    resolver -> real check->verified promotion through the handler),
+    TestDomainTenantIsolation (foreign domain GET 404 / assign 404, foreign
+    engagement 400, list isolation). go build/vet/test clean; full suite green;
+    gofmt-clean (touched files); web build clean (54 modules, no web changes).
+    Dev DB throwaway harness applies 0017 like every other migration.
+  - NOTE/deviation: CanActivate also covers suspended->active (reactivation),
+    since the lifecycle diagram includes active<->suspended but no separate
+    reactivate endpoint exists; activate requires an authorized assignment in
+    both cases. Live TXT verified-promotion is covered by
+    TestDomainVerificationPromotion (injected resolver); the lifecycle test
+    seeds 'verified' via SQL because the black-box harness uses the system
+    resolver, which cannot resolve example-domains. domain-level 'authorized'
+    status is reserved/derived (CanAuthorize exported + matrix-tested) — the
+    stored path is pending_verification->verified->active via activate.
+  - Scope boundaries respected: no changes to internal/events, campaign,
+    engagement internals (read-only repo use), delivery/bounce/recipient,
+    osint, engine*, cmd/engineproxy, public tracking routes; no new external Go
+    deps; no registrar/DNS-provider integrations.
 - Milestone: Event taxonomy v2 — channel-agnostic events (MECHANISM ONLY).
   COMPLETE. Adds a channel dimension + a Go-side event catalog so SMS/QR/auth
   events can be appended in future milestones without disturbing the email

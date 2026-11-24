@@ -50,6 +50,9 @@ type Config struct {
 	OSINTAPIKey  string
 	OSINTTimeout time.Duration
 
+	// DNS/TLS diagnostics (domain inventory). Bounds each lookup/dial.
+	DNSDiagTimeout time.Duration
+
 	// Bounce mailbox (IMAP). Optional; missing => no bounce polling.
 	IMAPHost     string
 	IMAPPort     int
@@ -96,6 +99,8 @@ func Load() (Config, error) {
 		OSINTBaseURL: os.Getenv("OSINT_BASE_URL"),
 		OSINTAPIKey:  os.Getenv("OSINT_API_KEY"),
 		OSINTTimeout: getenvDuration("OSINT_TIMEOUT", 30*time.Second),
+
+		DNSDiagTimeout: getenvDuration("DNS_DIAG_TIMEOUT", 10*time.Second),
 
 		IMAPHost:     os.Getenv("IMAP_HOST"),
 		IMAPPort:     getenvInt("IMAP_PORT", 993),

@@ -89,13 +89,14 @@ func main() {
 	srv := &http.Server{
 		Addr: cfg.APIAddr,
 		Handler: api.NewServer(api.Deps{
-			Pool:     pool,
-			BaseURL:  cfg.BaseURL,
-			Cipher:   cipher,
-			Enqueuer: enqueuer,
-			LLM:      llmClient,
-			Engines:  engManager,
-			OSINT:    osintClient,
+			Pool:        pool,
+			BaseURL:     cfg.BaseURL,
+			Cipher:      cipher,
+			Enqueuer:    enqueuer,
+			LLM:         llmClient,
+			Engines:     engManager,
+			OSINT:       osintClient,
+			DiagTimeout: cfg.DNSDiagTimeout,
 		}).Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -96,6 +96,9 @@ cascade on tenant delete. Migrations live in `migrations/` (`0001`…`0013`).
 | `ndr_messages` | fetched bounce notifications, deduped per message-id | → tenant, campaign |
 | `engines` | engine registry: validated YAML config, lifecycle status, callback token hash | → tenant |
 | `osint_results` | stored OSINT collections (one per tenant+domain) | → tenant, user |
+| `domains` | domain inventory: manually imported domains, lifecycle status, DNS/TLS metadata | → tenant, created-by user |
+| `domain_assignments` | binds a domain to an engagement; operator attaches (pending), admin authorizes | → tenant, domain, engagement, authorizing user |
+| `domain_verifications` | TXT ownership challenges (`_phishforge.<domain>`), opaque unique token | → tenant, domain |
 | `approvals` | draft→approved/rejected gate for a subject | → tenant |
 | `audit_log` | append-only record of operator actions | → tenant |
 | `configs` | per-tenant key/value settings | → tenant |
@@ -118,6 +121,36 @@ non-terminated `engagement` (operator requests → admin authorizes; admin can
 terminate as an emergency stop) before launch or send. Launch/send enforce this
 in the application (`campaigns.engagement_id → engagements`): unbound/
 unauthorized → `403`, expired/terminated → `409`.
+
+## Domain inventory (ownership ≠ authorization)
+
+The domain inventory (M8b/M8c) tracks externally purchased domains — there is
+no registrar API or automated purchasing; operators buy domains elsewhere and
+**manually import** them. A domain carries two *independent* kinds of state that
+must not be conflated:
+
+- **Ownership** is proven by publishing a TXT record at the fixed convention
+  `_phishforge.<domain>` whose value is `pf-domain-verify=<64-hex>`. The
+  `POST /domains/{id}/verification` endpoint issues an opaque, unique token; the
+  `.../check` endpoint does an **exact-match** TXT lookup and, on success,
+  promotes the domain `pending_verification → verified`. Verification is the
+  *only* way to reach `verified` (PATCH cannot assert it).
+- **Authorization** is a separate per-engagement decision: an operator *attaches*
+  a verified domain to an engagement (a `pending` `domain_assignment`), and an
+  **admin** flips the assignment to `authorized`. A domain can be verified with
+  no authorized assignment, and an engagement can be authorized without owning
+  any domain — the two checks never substitute for one another.
+
+The stored domain lifecycle is `candidate → pending_purchase →
+pending_verification → verified → active`, with `active ⇄ suspended`
+(reactivation re-enters through activate) and `any-non-terminal → retired`
+(terminal). `active` is reached only via `POST /domains/{id}/activate`, which
+requires the domain to be verified **and** to have at least one authorized
+assignment. `expired` is applied only via PATCH and only once `expires_at` is in
+the past (derive-and-note; no background job auto-mutates status in this
+milestone). DNS/TLS diagnostics (`GET /domains/{id}/diagnostics`) are read-only
+and dial only the stored domain name on port 443 — never a user-supplied host —
+so the probe cannot be used as an SSRF or port-scan primitive.
 
 ## Audit trail
 
