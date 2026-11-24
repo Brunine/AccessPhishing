@@ -236,6 +236,41 @@ func (r *Repository) MarkScheduled(ctx context.Context, q db.Querier, tenantID, 
 	return nil
 }
 
+// SetLaunchProfile records the app profile a campaign was launched against,
+// freezing its checksum + revision on the campaign (M10b Phase 3). These values
+// are the forensic stamp: a later profile import never rewrites them, so an
+// in-flight campaign keeps its launch-time checksum. Returns ErrNotFound if the
+// campaign is absent in the tenant.
+func (r *Repository) SetLaunchProfile(ctx context.Context, q db.Querier, tenantID, campaignID, profileID uuid.UUID, checksum string, version int) error {
+	const sql = `UPDATE campaigns
+	             SET app_profile_id = $3, profile_checksum = $4, profile_version = $5, updated_at = now()
+	             WHERE tenant_id = $1 AND id = $2`
+	tag, err := q.Exec(ctx, sql, tenantID, campaignID, profileID, checksum, version)
+	if err != nil {
+		return fmt.Errorf("campaign: set launch profile: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ProfileStampByCampaignID returns a campaign's frozen profile checksum and
+// version by id (no tenant scope; the engine-event ingest path is already
+// authorized by the per-run bearer token + recipient token). Both are nil when
+// the campaign was launched without a bound profile.
+func (r *Repository) ProfileStampByCampaignID(ctx context.Context, q db.Querier, id uuid.UUID) (checksum *string, version *int, err error) {
+	err = q.QueryRow(ctx,
+		`SELECT profile_checksum, profile_version FROM campaigns WHERE id = $1`, id).Scan(&checksum, &version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("campaign: profile stamp: %w", err)
+	}
+	return checksum, version, nil
+}
+
 // SetEngine binds (engineID non-nil) or unbinds (nil) an engine to a
 // campaign. Returns ErrNotFound if the campaign does not exist.
 func (r *Repository) SetEngine(ctx context.Context, q db.Querier, tenantID, campaignID uuid.UUID, engineID *uuid.UUID) error {

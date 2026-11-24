@@ -32,6 +32,7 @@ import (
 	"phishforge/internal/llmdraft"
 	"phishforge/internal/osintclient"
 	"phishforge/internal/osintresult"
+	"phishforge/internal/profiles"
 	"phishforge/internal/prompttpl"
 	"phishforge/internal/qr"
 	"phishforge/internal/recipient"
@@ -95,6 +96,7 @@ type Server struct {
 	llm          LLMClient
 	drafts       *llmdraft.Repository
 	prompttpls   *prompttpl.Repository
+	appProfiles  *profiles.Repository
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
 	engagements  *engagement.Repository
@@ -160,6 +162,7 @@ func NewServer(d Deps) *Server {
 		llm:          d.LLM,
 		drafts:       llmdraft.NewRepository(),
 		prompttpls:   prompttpl.NewRepository(),
+		appProfiles:  profiles.NewRepository(),
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
 		engagements:  engagement.NewRepository(),
@@ -327,6 +330,19 @@ func (s *Server) Router() http.Handler {
 			})
 
 			// Operator self-service API key management (tenant-scoped).
+			// M10b application profiles (operator): the runtime contract for the
+			// M5 AiTM proxy. CRUD + versioned YAML import. Validation uses the
+			// exact VALIDATION.md rule IDs; reserved auth/MFA methods are storable
+			// but refused at launch (409/501), not at import.
+			r.With(auth.RequireRole(auth.RoleOperator)).Route("/profiles", func(r chi.Router) {
+				r.Post("/", s.createProfile)
+				r.Get("/", s.listProfiles)
+				r.Post("/import", s.importProfile)
+				r.Get("/{id}", s.getProfile)
+				r.Put("/{id}", s.updateProfile)
+				r.Delete("/{id}", s.deleteProfile)
+			})
+
 			r.With(auth.RequireRole(auth.RoleOperator)).Route("/api-keys", func(r chi.Router) {
 				r.Get("/", s.listAPIKeys)
 				r.Post("/", s.createAPIKey)
@@ -409,7 +425,12 @@ func (s *Server) Router() http.Handler {
 		// group from tracking: engines post in batches, so a larger budget.
 		r.Group(func(r chi.Router) {
 			r.Use(newRateLimiter(600, time.Minute).middleware)
-			r.Post("/api/v1/engines/{id}/events", s.engineEvents)
+			// Relative to the /api/v1 mount: resolves to the documented
+			// /api/v1/engines/{id}/events the engine reporter posts to
+			// (handlers_engines.go ORCHESTRATOR_CALLBACK_URL). The earlier
+			// absolute pattern here doubled the prefix (/api/v1/api/v1/...),
+			// leaving the endpoint unreachable at its own callback URL.
+			r.Post("/engines/{id}/events", s.engineEvents)
 		})
 
 	})
