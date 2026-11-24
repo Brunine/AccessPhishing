@@ -6,7 +6,13 @@
 //
 // Linear progression (monotonic, forward-only):
 //
-//	pending → sent → delivered → opened → clicked → creds → session_hijacked → post_exploitation
+//	pending → sent → delivered → opened → scanned → clicked → creds → session_hijacked → post_exploitation
+//
+// scanned is the QR-scan step: it slots in immediately before clicked. A QR
+// scan and the click it triggers arrive on the same /t/{token} hit, so the
+// tracking handler records scanned then clicked (see internal/api). A direct
+// click with no prior scan is still valid; a scan after a click is a late
+// signal and is rejected as a no-op like any other regression.
 //
 // Transition rules:
 //   - A linear event is valid if its rank is >= the target's current rank.
@@ -59,6 +65,7 @@ const (
 	StateSent             State = "sent"
 	StateDelivered        State = "delivered"
 	StateOpened           State = "opened"
+	StateScanned          State = "scanned"
 	StateClicked          State = "clicked"
 	StateCreds            State = "creds"
 	StateSessionHijacked  State = "session_hijacked"
@@ -74,6 +81,7 @@ const (
 	TypeSent             Type = "sent"
 	TypeDelivered        Type = "delivered"
 	TypeOpened           Type = "opened"
+	TypeScanned          Type = "scanned"
 	TypeClicked          Type = "clicked"
 	TypeCreds            Type = "creds"
 	TypeSessionHijacked  Type = "session_hijacked"
@@ -90,10 +98,11 @@ var linearRank = map[State]int{
 	StateSent:             1,
 	StateDelivered:        2,
 	StateOpened:           3,
-	StateClicked:          4,
-	StateCreds:            5,
-	StateSessionHijacked:  6,
-	StatePostExploitation: 7,
+	StateScanned:          4,
+	StateClicked:          5,
+	StateCreds:            6,
+	StateSessionHijacked:  7,
+	StatePostExploitation: 8,
 }
 
 // stateForType maps a linear/terminal event type to the state it produces.
@@ -129,9 +138,16 @@ type eventSpec struct {
 
 // catalog is the channel-scoped event catalog. The email catalog is DERIVED
 // from linearRank/stateForType (kept as the single source of truth) so the
-// email funnel is provably unchanged. Non-email channels start empty and fail
-// closed — M9a/M9b add their entries here. Built once at init and read-only
-// thereafter.
+// email funnel is provably unchanged. The QR catalog (M9b) holds exactly one
+// entry — scanned — the only event that originates on the QR channel; the click
+// it triggers is recorded on the email channel like every other click, so the
+// qr catalog deliberately does NOT contain clicked (a qr-channel clicked append
+// still fails closed). sms/auth/system remain empty and fail closed. Built once
+// at init and read-only thereafter.
+//
+// Cross-channel transitions are sound because linearRank is global: a
+// qr-channel scanned (rank 4) advances the shared campaign_targets.state, and
+// the following email-channel clicked (rank 5) validates against that state.
 var catalog = buildCatalog()
 
 func buildCatalog() map[Channel]map[Type]eventSpec {
@@ -146,10 +162,17 @@ func buildCatalog() map[Channel]map[Type]eventSpec {
 	// reported is a side-channel event: recorded, no projection.
 	email[TypeReported] = eventSpec{rank: -1, projects: "", kind: kindSide}
 
+	// QR channel (M9b): scanned is a linear step before clicked. Its rank comes
+	// from the same global linearRank source of truth, so scanned → clicked
+	// (recorded on the email channel) is a valid forward transition.
+	qr := map[Type]eventSpec{
+		TypeScanned: {rank: linearRank[StateScanned], projects: StateScanned, kind: kindLinear},
+	}
+
 	return map[Channel]map[Type]eventSpec{
 		ChannelEmail:  email,
 		ChannelSMS:    {},
-		ChannelQR:     {},
+		ChannelQR:     qr,
 		ChannelAuth:   {},
 		ChannelSystem: {},
 	}

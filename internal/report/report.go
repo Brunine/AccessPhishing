@@ -26,14 +26,19 @@ var rank = map[string]int{
 }
 
 // Totals holds the recipient funnel for a campaign. Each linear field counts
-// recipients that reached that stage OR beyond (the successful path). bounced
-// and failed are reported separately and are not part of the funnel.
+// recipients that reached that stage OR beyond (the successful path). bounced,
+// failed and scanned are reported separately and are not part of the linear
+// funnel. scanned (M9b/quishing) counts recipients currently resting at the
+// 'scanned' state — a QR scan with no click yet; the common scan→click flow
+// lands on 'clicked', so the richer per-scan signal lives in the timeline
+// (scanned event counts) and the per-recipient drilldown (scanned_at).
 type Totals struct {
 	Recipients       int `json:"recipients"`
 	Pending          int `json:"pending"`
 	Sent             int `json:"sent"`
 	Delivered        int `json:"delivered"`
 	Opened           int `json:"opened"`
+	Scanned          int `json:"scanned"`
 	Clicked          int `json:"clicked"`
 	Creds            int `json:"creds"`
 	SessionHijacked  int `json:"session_hijacked"`
@@ -76,6 +81,7 @@ type RecipientRow struct {
 	SentAt            *time.Time `json:"sent_at,omitempty"`
 	DeliveredAt       *time.Time `json:"delivered_at,omitempty"`
 	OpenedAt          *time.Time `json:"opened_at,omitempty"`
+	ScannedAt         *time.Time `json:"scanned_at,omitempty"`
 	ClickedAt         *time.Time `json:"clicked_at,omitempty"`
 	CredsAt           *time.Time `json:"creds_at,omitempty"`
 	SessionHijackedAt *time.Time `json:"session_hijacked_at,omitempty"`
@@ -126,6 +132,10 @@ func totalsFromHistogram(hist map[string]int) (Totals, Rates) {
 			t.Bounced += n
 		case "failed":
 			t.Failed += n
+		case "scanned":
+			// A recipient resting at scanned (QR scan, click not yet recorded).
+			// Reported separately, like bounced/failed — not a linear stage.
+			t.Scanned += n
 		case "pending":
 			t.Pending += n
 		}
@@ -267,6 +277,7 @@ SELECT c.email,
        min(e.occurred_at) FILTER (WHERE e.type = 'sent')             AS sent_at,
        min(e.occurred_at) FILTER (WHERE e.type = 'delivered')        AS delivered_at,
        min(e.occurred_at) FILTER (WHERE e.type = 'opened')           AS opened_at,
+       min(e.occurred_at) FILTER (WHERE e.type = 'scanned')          AS scanned_at,
        min(e.occurred_at) FILTER (WHERE e.type = 'clicked')          AS clicked_at,
        min(e.occurred_at) FILTER (WHERE e.type = 'creds')            AS creds_at,
        min(e.occurred_at) FILTER (WHERE e.type = 'session_hijacked') AS session_hijacked_at,
@@ -290,7 +301,7 @@ ORDER BY c.email`
 	for rows.Next() {
 		var row RecipientRow
 		if err := rows.Scan(&row.Email, &row.State, &row.SentAt, &row.DeliveredAt,
-			&row.OpenedAt, &row.ClickedAt, &row.CredsAt, &row.SessionHijackedAt, &row.LastEventAt); err != nil {
+			&row.OpenedAt, &row.ScannedAt, &row.ClickedAt, &row.CredsAt, &row.SessionHijackedAt, &row.LastEventAt); err != nil {
 			return nil, fmt.Errorf("report: recipients scan: %w", err)
 		}
 		out = append(out, row)

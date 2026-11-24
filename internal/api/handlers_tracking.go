@@ -240,9 +240,20 @@ func (s *Server) trackClick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	landing, engineID, channel, err := s.campaigns.LandingRedirectByID(r.Context(), s.pool, rec.CampaignID)
+
+	// QR (quishing) campaigns: the scan and the click it triggers arrive on the
+	// same /t/{token} hit — there is no way to tell a QR scanner from a manual
+	// click on one URL server-side. So for a qr-channel campaign we record a
+	// scanned event (QR channel) first, then the clicked event (email channel,
+	// like every other click). The scan is best-effort: once the target is past
+	// scanned the state machine rejects it as a no-op, so a second hit never
+	// records a duplicate scanned. Email/SMS campaigns are unchanged.
+	if channel == string(events.ChannelQR) {
+		s.recordTrackingCh(r, rec, events.TypeScanned, events.ChannelQR)
+	}
 	s.recordTracking(r, rec, events.TypeClicked)
 
-	landing, engineID, err := s.campaigns.LandingRedirectByID(r.Context(), s.pool, rec.CampaignID)
 	if err == nil && landing != nil && *landing != "" {
 		target := *landing
 		if engineID != nil {
@@ -281,16 +292,23 @@ func (s *Server) trackOpen(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(transparentGIF)
 }
 
-// recordTracking appends an observed tracking event. It is best-effort: an
-// out-of-order signal (e.g. an open after a click) is a no-op on state and is
-// not surfaced to the public caller.
+// recordTracking appends an observed tracking event on the email channel. It is
+// best-effort: an out-of-order signal (e.g. an open after a click) is a no-op on
+// state and is not surfaced to the public caller.
 func (s *Server) recordTracking(r *http.Request, rec recipient.Recipient, t events.Type) {
+	s.recordTrackingCh(r, rec, t, events.ChannelEmail)
+}
+
+// recordTrackingCh appends an observed tracking event on an explicit channel.
+// Best-effort: an unknown-channel or out-of-order signal is ignored (no row, no
+// state change) and never surfaced to the public caller.
+func (s *Server) recordTrackingCh(r *http.Request, rec recipient.Recipient, t events.Type, ch events.Channel) {
 	_, _ = s.events.Append(r.Context(), events.NewEvent{
 		TenantID:   rec.TenantID,
 		CampaignID: rec.CampaignID,
 		ContactID:  rec.ContactID,
 		Type:       t,
-		Channel:    events.ChannelEmail,
+		Channel:    ch,
 		Metadata: map[string]any{
 			"ip": clientIP(r),
 			"ua": r.UserAgent(),

@@ -27,12 +27,27 @@ func ValidStatus(s string) bool {
 	}
 }
 
+// ValidChannel reports whether s is a campaign channel the create path accepts.
+// The column reuses the event_channel enum, but a campaign is only ever created
+// as 'email' (the default vector, including SMS campaigns, whose SMS-ness comes
+// from the bound sending profile) or 'qr' (M9b quishing). auth/system are event
+// channels, never campaign channels.
+func ValidChannel(s string) bool {
+	switch s {
+	case "email", "qr":
+		return true
+	default:
+		return false
+	}
+}
+
 // Campaign is a campaign owned by a single tenant.
 type Campaign struct {
 	ID               uuid.UUID  `json:"id"`
 	TenantID         uuid.UUID  `json:"tenant_id"`
 	Name             string     `json:"name"`
 	Status           string     `json:"status"`
+	Channel          string     `json:"channel"`
 	LandingURL       *string    `json:"landing_url,omitempty"`
 	TemplateID       *uuid.UUID `json:"template_id,omitempty"`
 	SendingProfileID *uuid.UUID `json:"sending_profile_id,omitempty"`
@@ -54,11 +69,11 @@ type Repository struct{}
 // NewRepository returns a campaign repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const campaignColumns = `id, tenant_id, name, status, landing_url, template_id, sending_profile_id, engine_id, engagement_id, created_by, created_at, updated_at`
+const campaignColumns = `id, tenant_id, name, status, channel, landing_url, template_id, sending_profile_id, engine_id, engagement_id, created_by, created_at, updated_at`
 
 // joinedColumns adds the bound engagement's stored status + expiry so the
 // derived effective label can be computed in Go without an N+1 lookup.
-const joinedColumns = `c.id, c.tenant_id, c.name, c.status, c.landing_url, c.template_id, c.sending_profile_id, c.engine_id, c.engagement_id, c.created_by, c.created_at, c.updated_at, e.status, e.expires_at`
+const joinedColumns = `c.id, c.tenant_id, c.name, c.status, c.channel, c.landing_url, c.template_id, c.sending_profile_id, c.engine_id, c.engagement_id, c.created_by, c.created_at, c.updated_at, e.status, e.expires_at`
 
 // scanCampaign scans the base columns (used by RETURNING, no engagement join).
 func scanCampaign(row pgx.Row) (Campaign, error) {
@@ -69,7 +84,7 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 		eng uuid.NullUUID
 		eid uuid.NullUUID
 	)
-	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &eng, &eid, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.Channel, &c.LandingURL, &tpl, &sp, &eng, &eid, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Campaign{}, err
 	}
 	setOpt(&c.TemplateID, tpl)
@@ -91,7 +106,7 @@ func scanCampaignJoined(row pgx.Row) (Campaign, error) {
 		engStatus *string
 		engExpiry *time.Time
 	)
-	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.LandingURL, &tpl, &sp, &eng, &eid, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &engStatus, &engExpiry); err != nil {
+	if err := row.Scan(&c.ID, &c.TenantID, &c.Name, &c.Status, &c.Channel, &c.LandingURL, &tpl, &sp, &eng, &eid, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &engStatus, &engExpiry); err != nil {
 		return Campaign{}, err
 	}
 	setOpt(&c.TemplateID, tpl)
@@ -118,9 +133,15 @@ func setOpt(dst **uuid.UUID, n uuid.NullUUID) {
 // Create inserts a new campaign for a tenant and returns the stored row. An
 // optional engagementID binds the campaign to its authorizing engagement at
 // creation time; the caller is responsible for validating same-tenant ownership.
-func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID, createdBy uuid.UUID, name string, engagementID *uuid.UUID) (Campaign, error) {
-	const sql = `INSERT INTO campaigns (tenant_id, name, created_by, engagement_id) VALUES ($1, $2, $3, $4) RETURNING ` + campaignColumns
-	c, err := scanCampaign(q.QueryRow(ctx, sql, tenantID, name, createdBy, engagementID))
+// channel is the delivery vector ('email' or 'qr'); an empty value defaults to
+// 'email'. The caller is responsible for validating channel (see ValidChannel).
+func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID, createdBy uuid.UUID, name, channel string, engagementID *uuid.UUID) (Campaign, error) {
+	if channel == "" {
+		channel = "email"
+	}
+	const sql = `INSERT INTO campaigns (tenant_id, name, channel, created_by, engagement_id)
+	             VALUES ($1, $2, $3::event_channel, $4, $5) RETURNING ` + campaignColumns
+	c, err := scanCampaign(q.QueryRow(ctx, sql, tenantID, name, channel, createdBy, engagementID))
 	if err != nil {
 		return Campaign{}, fmt.Errorf("campaign: create: %w", err)
 	}
@@ -244,27 +265,29 @@ func (r *Repository) LandingURLByID(ctx context.Context, q db.Querier, id uuid.U
 	return url, nil
 }
 
-// LandingRedirectByID returns a campaign's landing URL and engine binding by
-// id (no tenant scope; the public tracking redirect is authorized by the
-// recipient token). The engine binding decides whether the victim token is
-// passed through to the landing page as _pft.
-func (r *Repository) LandingRedirectByID(ctx context.Context, q db.Querier, id uuid.UUID) (*string, *uuid.UUID, error) {
+// LandingRedirectByID returns a campaign's landing URL, engine binding, and
+// delivery channel by id (no tenant scope; the public tracking redirect is
+// authorized by the recipient token). The engine binding decides whether the
+// victim token is passed through to the landing page as _pft; the channel lets
+// the tracking handler record a QR scan (scanned) before the click.
+func (r *Repository) LandingRedirectByID(ctx context.Context, q db.Querier, id uuid.UUID) (*string, *uuid.UUID, string, error) {
 	var (
-		url *string
-		eng uuid.NullUUID
+		url     *string
+		eng     uuid.NullUUID
+		channel string
 	)
 	err := q.QueryRow(ctx,
-		`SELECT landing_url, engine_id FROM campaigns WHERE id = $1`, id).Scan(&url, &eng)
+		`SELECT landing_url, engine_id, channel::text FROM campaigns WHERE id = $1`, id).Scan(&url, &eng, &channel)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, ErrNotFound
+		return nil, nil, "", ErrNotFound
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("campaign: landing redirect: %w", err)
+		return nil, nil, "", fmt.Errorf("campaign: landing redirect: %w", err)
 	}
 	var engineID *uuid.UUID
 	if eng.Valid {
 		id2 := eng.UUID
 		engineID = &id2
 	}
-	return url, engineID, nil
+	return url, engineID, channel, nil
 }

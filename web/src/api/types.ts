@@ -46,11 +46,14 @@ export type CampaignStatus =
   | "completed"
   | "archived";
 
+export type CampaignChannel = "email" | "qr";
+
 export interface Campaign {
   id: string;
   tenant_id: string;
   name: string;
   status: CampaignStatus;
+  channel: CampaignChannel;
   landing_url?: string;
   template_id?: string;
   sending_profile_id?: string;
@@ -261,11 +264,29 @@ export interface CampaignLink {
   pixel_url: string;
 }
 
+export interface QRCodeEntry {
+  recipient_id: string;
+  contact_id: string;
+  token: string;
+  click_url: string;
+  qr_png_base64: string;
+  data_uri: string;
+}
+
+export interface QRCodesResponse {
+  campaign_id: string;
+  channel: CampaignChannel;
+  size: number;
+  ec_level: string;
+  items: QRCodeEntry[];
+}
+
 export type TargetState =
   | "pending"
   | "sent"
   | "delivered"
   | "opened"
+  | "scanned"
   | "clicked"
   | "creds"
   | "session_hijacked"
@@ -313,6 +334,7 @@ export interface ReportTotals {
   sent: number;
   delivered: number;
   opened: number;
+  scanned: number;
   clicked: number;
   creds: number;
   session_hijacked: number;

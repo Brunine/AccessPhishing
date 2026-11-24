@@ -84,13 +84,13 @@ func (s *Server) campaignReportCSV(w http.ResponseWriter, r *http.Request) {
 
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{
-		"email", "state", "sent_at", "delivered_at", "opened_at",
+		"email", "state", "sent_at", "delivered_at", "opened_at", "scanned_at",
 		"clicked_at", "creds_at", "session_hijacked_at", "last_event_at",
 	})
 	for _, row := range rows {
 		_ = cw.Write([]string{
 			row.Email, row.State,
-			fmtTime(row.SentAt), fmtTime(row.DeliveredAt), fmtTime(row.OpenedAt),
+			fmtTime(row.SentAt), fmtTime(row.DeliveredAt), fmtTime(row.OpenedAt), fmtTime(row.ScannedAt),
 			fmtTime(row.ClickedAt), fmtTime(row.CredsAt), fmtTime(row.SessionHijackedAt),
 			fmtTime(row.LastEventAt),
 		})

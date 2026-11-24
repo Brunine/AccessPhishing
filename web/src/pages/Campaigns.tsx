@@ -16,6 +16,7 @@ export default function Campaigns() {
   const { data, loading, error, reload } = useAsync(() => api.campaigns.list());
   const engagements = useAsync(() => api.engagements.list());
   const [name, setName] = useState("");
+  const [channel, setChannel] = useState("email");
   const [engagementId, setEngagementId] = useState("");
   const [busy, setBusy] = useState(false);
   const [formErr, setFormErr] = useState<unknown>(null);
@@ -27,9 +28,11 @@ export default function Campaigns() {
     try {
       await api.campaigns.create({
         name,
+        channel,
         engagement_id: engagementId || undefined,
       });
       setName("");
+      setChannel("email");
       setEngagementId("");
       reload();
     } catch (e) {
@@ -53,6 +56,15 @@ export default function Campaigns() {
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        <select
+          className="input w-full sm:w-44"
+          value={channel}
+          onChange={(e) => setChannel(e.target.value)}
+          title="Delivery vector"
+        >
+          <option value="email">Email</option>
+          <option value="qr">QR / quishing</option>
+        </select>
         <select
           className="input w-full sm:w-72"
           value={engagementId}
@@ -82,6 +94,7 @@ export default function Campaigns() {
           head={
             <tr>
               <th className="th">Name</th>
+              <th className="th">Channel</th>
               <th className="th">Status</th>
               <th className="th">Created</th>
               <th className="th"></th>
@@ -95,6 +108,7 @@ export default function Campaigns() {
                   {c.name}
                 </Link>
               </td>
+              <td className="td text-slate-400">{c.channel === "qr" ? "QR" : "email"}</td>
               <td className="td">
                 <Badge value={c.status} />
               </td>

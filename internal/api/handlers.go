@@ -96,6 +96,7 @@ func (s *Server) getTenant(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name         string     `json:"name"`
+		Channel      string     `json:"channel"`
 		EngagementID *uuid.UUID `json:"engagement_id"`
 	}
 	if !decode(w, r, &in) {
@@ -103,6 +104,11 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Name == "" {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "name is required")
+		return
+	}
+	// channel defaults to 'email'; 'qr' selects the quishing vector (M9b).
+	if in.Channel != "" && !campaign.ValidChannel(in.Channel) {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "channel must be 'email' or 'qr'")
 		return
 	}
 	p, _ := auth.FromContext(r.Context())
@@ -123,12 +129,12 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
-	c, err := s.campaigns.Create(r.Context(), tx, p.TenantID, p.UserID, in.Name, in.EngagementID)
+	c, err := s.campaigns.Create(r.Context(), tx, p.TenantID, p.UserID, in.Name, in.Channel, in.EngagementID)
 	if err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "create campaign")
 		return
 	}
-	meta := map[string]any{"name": c.Name}
+	meta := map[string]any{"name": c.Name, "channel": c.Channel}
 	if in.EngagementID != nil {
 		meta["engagement_id"] = in.EngagementID.String()
 	}

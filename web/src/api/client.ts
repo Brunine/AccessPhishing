@@ -8,6 +8,7 @@ import type {
   Approval,
   Campaign,
   CampaignLink,
+  QRCodesResponse,
   CampaignReport,
   CampaignTarget,
   CreatedAPIKey,
@@ -218,7 +219,7 @@ export const api = {
     list: () =>
       request<ListResponse<Campaign>>("GET", "/campaigns").then(items),
     get: (id: string) => request<Campaign>("GET", `/campaigns/${id}`),
-    create: (b: { name: string; engagement_id?: string }) =>
+    create: (b: { name: string; channel?: string; engagement_id?: string }) =>
       request<Campaign>("POST", "/campaigns", b),
     patch: (id: string, b: { status?: string; engagement_id?: string }) =>
       request<Campaign>("PATCH", `/campaigns/${id}`, b),
@@ -241,6 +242,8 @@ export const api = {
         "GET",
         `/campaigns/${id}/links`
       ).then(items),
+    qrcodes: (id: string) =>
+      request<QRCodesResponse>("GET", `/campaigns/${id}/qrcodes`),
     targets: (id: string) =>
       request<ListResponse<CampaignTarget>>(
         "GET",

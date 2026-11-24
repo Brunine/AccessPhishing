@@ -54,7 +54,9 @@ concise. Tables for tradeoffs, code blocks for everything executable.
       console)
 - [~] M9 Secondary vectors (M9a SMS/smishing DONE; M9b QR/quishing, M9c
       collaboration channels, M9d MFA-fatigue still open; BitB injects declined)
-- [ ] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
+- [~] M10 Own reverse proxy v2 (Go + goproxy/utls, phishlet parser, JA4 shaping)
+      (M10a engine adapter done; M10b application-profile schema DESIGN done in
+      docs/PROFILES/ — Phase 3 impl + M5 proxy consumption still open)
 
 Victim state machine: sent → delivered → opened → clicked → creds → session_hijacked → post_exploitation
 
@@ -65,6 +67,63 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: M10b Phase 2 — Application Profile System schema. COMPLETE
+  (DESIGN ONLY — no Go code, no migration, no handlers). Per-application
+  "profiles" describing how to phish+proxy a target login surface (form/SSO/MFA
+  shape, session success markers + token locations, phishing-facet clone config)
+  as the runtime contract for M5's AiTM proxy and the M6 clone/LLM layer.
+  M10b Phase 3 (implementation) NOT STARTED. M5 NOT STARTED.
+- Done (M10b Phase 2 — profile schema, design only):
+  - docs/PROFILES/SCHEMA.md: YAML profile schema v1. Top-level version(int)/
+    metadata/auth/session/mfa/phishing_facet + optional proxy + reserved x-
+    namespace. Design principles: fail-closed (missing/unknown auth.method =>
+    unusable, never guessed), capture=explicit allowlist, secrets-never (shape
+    not values), x- extensibility, versioned. Grounded capture->creds mapping
+    section pinned to the ACTUAL code: internal/api/handlers_engine_events.go
+    sanitizeEnginePayload (metadata = field/cookie NAMES only, values stripped
+    at ingest) + internal/engineproxy/capture.go (credFields allowlist). auth
+    method `form` fully specified (generalizes engineconfig.Capture:
+    capture:true upstream_field -> CredentialFormFields; cookie token_locations
+    -> SessionCookies; proxy.* -> Capture.* knobs); oauth2_code/saml_post/ntlm/
+    basic reserved+recognized but proxy-unsupported in v1 (forward-compat enum,
+    like engagement_status active/expired). Intended migration 0021 table shape
+    (pseudo-SQL, columns only): app_profiles (tenant-scoped, UNIQUE(tenant,name),
+    status enum draft|verified|active|suspended|retired, spec jsonb + spec_yaml
+    + checksum, created_by FK, updated_at trigger) + app_profile_assignments
+    (engagement binding + admin authorize gate, pending|authorized|revoked,
+    UNIQUE(profile,engagement)) — mirrors domains 0017; verification and
+    authorization enforced INDEPENDENTLY.
+  - docs/PROFILES/examples/owa.yaml: complete realistic OWA/Exchange FBA profile
+    filling every section (form method, username/password capture + non-captured
+    control field, cadata/UserContext success cookies intersecting
+    token_locations, totp_field MFA captured into the same creds mechanism,
+    mirror clone, proxy knobs, x- annotations). No secrets/values.
+  - docs/PROFILES/VALIDATION.md: ~40 numbered rules with stable IDs + severity
+    (error|warn), grouped by section. Key cross-checks: AUTH-METHOD-REQUIRED/
+    -KNOWN/-UNSUPPORTED, SESSION-INDICATOR-INTERSECT (every cookie_set success
+    indicator must appear as a cookie token_location), MFA-TOTP-CONSISTENCY/
+    -CAPTURED, SECRETS-NO-VALUES, SCHEMA-UNKNOWN-KEY (x- exempt),
+    SELECTOR-SYNTAX (bounded, injection-free). Caps mirror engineconfig
+    (32 fields/cookies, 1 MiB body, 64 KiB doc). Collect-all-errors like
+    engineconfig.ValidationError.
+  - docs/ADR.md (NEW file — did not exist): ADR-0001 covering file-based +
+    DB-backed + explicit-allowlist capture + version field + what M5 does with
+    the contract. RECOMMENDATION logged: profile edits take effect without
+    re-launch (proxy reads current active profile per request; changes audited;
+    authorization gate bounds which profile applies) vs snapshot-at-launch —
+    flagged for ruling. Open questions deferred (NOT silently decided): OAuth2
+    code-flow / SAML POST interception model, MFA push_intercept/custom.
+  - DEVIATIONS (justified in-doc): x- extension namespace is ignored whereas
+    engineconfig rejects ALL unknown fields (profiles are long-lived shareable
+    artifacts — reserved ignore-namespace + strict core keys); PHISHLET_SCHEMA.md
+    is a separate empty stub (Evilginx phishlet compat, untouched — profiles are
+    our native schema, not the phishlet YAML). docs/ADR.md was referenced by
+    prior PROJECT STATE notes but never created; now created.
+  - Verification: every YAML example parses (python yaml.safe_load on owa.yaml +
+    the SCHEMA.md fenced block); validation rules reference only schema fields;
+    git status --short touches ONLY docs/ + CLAUDE.md (pre-existing M9b/quishing
+    working-tree changes are unrelated and left untouched); no go.mod/code
+    changes. Branch docs/m10b-profile-schema; no migration, no dev-DB apply.
 - Milestone: M8b + M8c-lite — domain inventory, manual import & DNS/TLS
   diagnostics. COMPLETE. Centralized inventory of externally purchased domains
   (NO registrar API / NO automated purchasing — operators import manually),
