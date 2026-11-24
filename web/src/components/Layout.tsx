@@ -7,6 +7,7 @@ const NAV = [
   { to: "/overview", label: "Overview" },
   { to: "/campaigns", label: "Campaigns" },
   { to: "/engagements", label: "Engagements" },
+  { to: "/domains", label: "Domains" },
   { to: "/contacts", label: "Contacts" },
   { to: "/templates", label: "Templates" },
   { to: "/sending-profiles", label: "Sending Profiles" },

@@ -12,6 +12,13 @@ import type {
   CampaignTarget,
   CreatedAPIKey,
   Contact,
+  Domain,
+  DomainAssignment,
+  DomainDiagnostics,
+  DomainInput,
+  DomainPatch,
+  DomainVerificationChallenge,
+  DomainVerificationCheck,
   Engagement,
   EngagementInput,
   Group,
@@ -284,6 +291,52 @@ export const api = {
       request<Engagement>("POST", `/engagements/${id}/authorize`),
     terminate: (id: string) =>
       request<Engagement>("POST", `/engagements/${id}/terminate`),
+  },
+
+  domains: {
+    list: () =>
+      request<ListResponse<Domain>>("GET", "/domains").then(items),
+    get: (id: string) => request<Domain>("GET", `/domains/${id}`),
+    create: (b: DomainInput) => request<Domain>("POST", "/domains", b),
+    patch: (id: string, b: DomainPatch) =>
+      request<Domain>("PATCH", `/domains/${id}`, b),
+    remove: (id: string) => request<void>("DELETE", `/domains/${id}`),
+    createVerification: (id: string) =>
+      request<DomainVerificationChallenge>(
+        "POST",
+        `/domains/${id}/verification`
+      ),
+    checkVerification: (id: string, vid: string) =>
+      request<DomainVerificationCheck>(
+        "POST",
+        `/domains/${id}/verification/${vid}/check`
+      ),
+    assign: (id: string, engagementId: string, notes?: string) =>
+      request<DomainAssignment>("POST", `/domains/${id}/assign`, {
+        engagement_id: engagementId,
+        notes: notes || undefined,
+      }),
+    assignments: (id: string) =>
+      request<ListResponse<DomainAssignment>>(
+        "GET",
+        `/domains/${id}/assignments`
+      ).then(items),
+    authorizeAssignment: (id: string, aid: string) =>
+      request<DomainAssignment>(
+        "POST",
+        `/domains/${id}/assignments/${aid}/authorize`
+      ),
+    revokeAssignment: (id: string, aid: string) =>
+      request<DomainAssignment>(
+        "POST",
+        `/domains/${id}/assignments/${aid}/revoke`
+      ),
+    activate: (id: string) =>
+      request<Domain>("POST", `/domains/${id}/activate`),
+    suspend: (id: string) => request<Domain>("POST", `/domains/${id}/suspend`),
+    retire: (id: string) => request<Domain>("POST", `/domains/${id}/retire`),
+    diagnostics: (id: string) =>
+      request<DomainDiagnostics>("GET", `/domains/${id}/diagnostics`),
   },
 
   approvals: {
