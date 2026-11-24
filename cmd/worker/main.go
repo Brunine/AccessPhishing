@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -11,12 +12,17 @@ import (
 	"github.com/hibiken/asynq"
 
 	"phishforge/internal/bounce"
+	"phishforge/internal/candidate"
 	"phishforge/internal/config"
 	"phishforge/internal/crypto"
 	"phishforge/internal/db"
 	"phishforge/internal/delivery"
+	"phishforge/internal/engagement"
 	"phishforge/internal/enginehealth"
 	"phishforge/internal/events"
+	"phishforge/internal/llm"
+	"phishforge/internal/osintclient"
+	"phishforge/internal/registrar"
 	"phishforge/internal/tasks"
 )
 
@@ -69,6 +75,39 @@ func main() {
 
 	bounces := bounce.NewRepository(events.NewRepository(pool))
 
+	// M8d candidate discovery collector. OSINT is required (suggestions come
+	// from it); registrar adapters price the candidates (Porkbun is always on,
+	// Namecheap/Cloudflare are optional). An optional LLM namer may propose
+	// extra candidate NAMES only — it never affects availability, price, or rank.
+	osintClient := osintclient.New(cfg.OSINTBaseURL, cfg.OSINTAPIKey, cfg.OSINTTimeout)
+	regSet := registrar.NewSet(
+		registrar.NewPorkbun(cfg.PorkbunBaseURL, cfg.RegistrarTimeout),
+		registrar.NewCloudflare(cfg.CloudflarePricingURL, cfg.RegistrarTimeout),
+		registrar.NewNamecheap(registrar.NamecheapConfig{
+			BaseURL: cfg.NamecheapBaseURL, APIUser: cfg.NamecheapAPIUser, APIKey: cfg.NamecheapAPIKey,
+			Username: cfg.NamecheapUsername, ClientIP: cfg.NamecheapClientIP, Timeout: cfg.RegistrarTimeout,
+		}),
+	)
+	var namer candidate.NameSuggester
+	if cfg.CandidateLLMNaming {
+		if lc := llm.New(cfg.LLMBaseURL, cfg.LLMModel, cfg.LLMTimeout); lc != nil {
+			namer = candidate.NewLLMNamer(lc)
+			logger.Info("candidate LLM naming enabled", "model", cfg.LLMModel)
+		} else {
+			logger.Warn("CANDIDATE_LLM_NAMING set but LLM_BASE_URL is empty; LLM naming disabled")
+		}
+	}
+	var collector *candidate.Collector
+	if osintClient != nil {
+		collector = candidate.NewCollector(candidate.CollectorConfig{
+			Pool: pool, OSINT: osintClient, Registrars: regSet, Names: namer,
+			MaxCandidates: cfg.CandidateMaxCandidates, Logger: logger,
+		})
+		logger.Info("candidate discovery enabled", "registrars", regSet.Names())
+	} else {
+		logger.Warn("OSINT_BASE_URL not set; candidate:collect tasks will be dropped")
+	}
+
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(tasks.TypeCampaignSend, func(ctx context.Context, t *asynq.Task) error {
 		p, err := tasks.ParseCampaignSend(t)
@@ -94,6 +133,28 @@ func main() {
 			return err
 		}
 		logger.Info("bounces ingested", "tenant", p.TenantID, "processed", processed, "skipped", skipped)
+		return nil
+	})
+	mux.HandleFunc(tasks.TypeCandidateCollect, func(ctx context.Context, t *asynq.Task) error {
+		p, err := tasks.ParseCandidateCollect(t)
+		if err != nil {
+			return err
+		}
+		if collector == nil {
+			logger.Error("candidate collect task but collector disabled (no OSINT)", "engagement", p.EngagementID)
+			return nil // drop: cannot process without OSINT; retrying will not help
+		}
+		res, err := collector.Collect(ctx, p.TenantID, p.EngagementID, p.RequestedBy)
+		if err != nil {
+			if isPermanentCollectErr(err) {
+				logger.Warn("candidate collect skipped", "engagement", p.EngagementID, "reason", err)
+				return nil // engagement no longer eligible; drop without retry
+			}
+			logger.Error("candidate collect failed", "engagement", p.EngagementID, "err", err)
+			return err
+		}
+		logger.Info("candidate collect done", "engagement", p.EngagementID,
+			"suggested", res.Suggested, "scored", res.Scored, "conflicts", res.Conflicts)
 		return nil
 	})
 
@@ -156,5 +217,21 @@ func main() {
 	if err := srv.Run(mux); err != nil {
 		logger.Error("worker stopped", "err", err)
 		os.Exit(1)
+	}
+}
+
+// isPermanentCollectErr reports whether a candidate-collect error is permanent
+// (the engagement is gone or no longer eligible), so the task should be dropped
+// rather than retried. Transient DB/network errors are not permanent.
+func isPermanentCollectErr(err error) bool {
+	switch {
+	case errors.Is(err, engagement.ErrNotFound),
+		errors.Is(err, engagement.ErrEngagementNotAuthorized),
+		errors.Is(err, engagement.ErrEngagementExpired),
+		errors.Is(err, engagement.ErrEngagementTerminated),
+		errors.Is(err, candidate.ErrNoScope):
+		return true
+	default:
+		return false
 	}
 }

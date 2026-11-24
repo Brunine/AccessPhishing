@@ -55,6 +55,22 @@ type Config struct {
 	// DNS/TLS diagnostics (domain inventory). Bounds each lookup/dial.
 	DNSDiagTimeout time.Duration
 
+	// M8d domain candidate discovery + registrar price comparison. Porkbun is
+	// always available (public pricing API). Namecheap/Cloudflare are optional:
+	// absent credentials/URL leave that adapter out of the comparison.
+	RegistrarTimeout       time.Duration
+	PorkbunBaseURL         string
+	NamecheapBaseURL       string
+	NamecheapAPIUser       string
+	NamecheapAPIKey        string
+	NamecheapUsername      string
+	NamecheapClientIP      string
+	CloudflarePricingURL   string
+	CandidateMaxCandidates int
+	// CandidateLLMNaming enables optional LLM-suggested candidate names (needs
+	// LLM_BASE_URL). Deterministic scoring is unaffected either way.
+	CandidateLLMNaming bool
+
 	// Bounce mailbox (IMAP). Optional; missing => no bounce polling.
 	IMAPHost     string
 	IMAPPort     int
@@ -105,6 +121,17 @@ func Load() (Config, error) {
 		OSINTTimeout: getenvDuration("OSINT_TIMEOUT", 30*time.Second),
 
 		DNSDiagTimeout: getenvDuration("DNS_DIAG_TIMEOUT", 10*time.Second),
+
+		RegistrarTimeout:       getenvDuration("REGISTRAR_TIMEOUT", 15*time.Second),
+		PorkbunBaseURL:         getenv("PORKBUN_BASE_URL", "https://api.porkbun.com"),
+		NamecheapBaseURL:       getenv("NAMECHEAP_BASE_URL", "https://api.namecheap.com"),
+		NamecheapAPIUser:       os.Getenv("NAMECHEAP_API_USER"),
+		NamecheapAPIKey:        os.Getenv("NAMECHEAP_API_KEY"),
+		NamecheapUsername:      os.Getenv("NAMECHEAP_USERNAME"),
+		NamecheapClientIP:      os.Getenv("NAMECHEAP_CLIENT_IP"),
+		CloudflarePricingURL:   os.Getenv("CLOUDFLARE_PRICING_URL"),
+		CandidateMaxCandidates: getenvInt("CANDIDATE_MAX_CANDIDATES", 50),
+		CandidateLLMNaming:     getenv("CANDIDATE_LLM_NAMING", "false") == "true",
 
 		IMAPHost:     os.Getenv("IMAP_HOST"),
 		IMAPPort:     getenvInt("IMAP_PORT", 993),

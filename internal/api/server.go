@@ -16,6 +16,7 @@ import (
 	"phishforge/internal/approval"
 	"phishforge/internal/auth"
 	"phishforge/internal/campaign"
+	"phishforge/internal/candidate"
 	"phishforge/internal/contact"
 	"phishforge/internal/crypto"
 	"phishforge/internal/dnsdiag"
@@ -44,6 +45,9 @@ import (
 // Enqueuer schedules background tasks (implemented by internal/tasks.Client).
 type Enqueuer interface {
 	EnqueueCampaignSend(ctx context.Context, tenantID, campaignID uuid.UUID) error
+	// EnqueueCandidateCollect schedules an engagement-scoped domain-candidate
+	// discovery run (M8d). The actual work is done by the worker.
+	EnqueueCandidateCollect(ctx context.Context, tenantID, engagementID, requestedBy uuid.UUID) error
 }
 
 // LLMClient drafts message content. Implemented by internal/llm.Client; a nil
@@ -90,6 +94,7 @@ type Server struct {
 	campaigns    *campaign.Repository
 	engagements  *engagement.Repository
 	domains      *domain.Repository
+	candidates   *candidate.Repository
 	resolver     dnsdiag.Resolver
 	diagTimeout  time.Duration
 	contacts     *contact.Repository
@@ -144,6 +149,7 @@ func NewServer(d Deps) *Server {
 		campaigns:    campaign.NewRepository(),
 		engagements:  engagement.NewRepository(),
 		domains:      domain.NewRepository(),
+		candidates:   candidate.NewRepository(),
 		resolver:     resolver,
 		diagTimeout:  diagTimeout,
 		contacts:     contact.NewRepository(),
@@ -224,7 +230,23 @@ func (s *Server) Router() http.Handler {
 				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/request-authorization", s.requestEngagementAuthorization)
 				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/authorize", s.authorizeEngagement)
 				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/terminate", s.terminateEngagement)
+
+				// M8d domain intelligence & procurement: engagement-scoped
+				// candidate discovery (operator). collect enqueues a background
+				// job and is gated exactly like campaign launch (403/409) — a
+				// candidate can only be derived from an authorized engagement's
+				// scope. The list/get are read-only; select/reject record the
+				// operator's manual pick (purchase + import stay external/manual).
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/candidates/collect", s.collectCandidates)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/candidates", s.listCandidates)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/candidates/{cid}", s.getCandidate)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/candidates/{cid}/select", s.selectCandidate)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/candidates/{cid}/reject", s.rejectCandidate)
 			})
+
+			// M8d registrar catalog: the registrars we can obtain comparable
+			// price quotes from (operator, read-only, global).
+			r.With(auth.RequireRole(auth.RoleOperator)).Get("/registrars", s.listRegistrars)
 
 			// M8b/M8c domain inventory: manual import, TXT ownership
 			// verification, assignment to engagements, and DNS/TLS diagnostics.

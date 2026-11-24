@@ -14,6 +14,9 @@ from ..models import (
     GenerateRequest,
     GenerateResponse,
     ReputationResponse,
+    SuggestCandidate,
+    SuggestRequest,
+    SuggestResponse,
 )
 from ..services import rdap, twist, virustotal
 
@@ -31,6 +34,42 @@ async def post_generate(
         count=len(candidates),
         truncated=truncated,
         candidates=candidates,
+    )
+
+
+@router.post("/suggest", response_model=SuggestResponse)
+async def post_suggest(
+    body: SuggestRequest,
+    settings: Settings = Depends(get_settings),
+    client: httpx.AsyncClient = Depends(get_http),
+) -> SuggestResponse:
+    """Suggest lookalike candidates for a seed domain, annotated with RDAP
+    availability. This is the candidate-suggestion input for the orchestrator's
+    M8d procurement pipeline: it combines lookalike generation with the existing
+    availability check so the caller gets priceable, availability-scored
+    candidates in one pass. Generation is deterministic; availability is RDAP.
+    """
+    candidates, gen_truncated = twist.generate(body.domain, body.modes, settings.max_candidates)
+    # Availability-check only the first `limit` candidates (deterministic order)
+    # to keep the call bounded; the rest are reported without availability.
+    subset = candidates[: body.limit]
+    avail = await rdap.check_availability([c["domain"] for c in subset], settings, client)
+    by_domain = {a["domain"]: a for a in avail}
+    out = [
+        SuggestCandidate(
+            domain=c["domain"],
+            fuzzer=c["fuzzer"],
+            available=by_domain.get(c["domain"], {}).get("available"),
+            status_code=by_domain.get(c["domain"], {}).get("status_code"),
+        )
+        for c in subset
+    ]
+    truncated = gen_truncated or len(candidates) > len(subset)
+    return SuggestResponse(
+        domain=body.domain,
+        count=len(out),
+        truncated=truncated,
+        candidates=out,
     )
 
 

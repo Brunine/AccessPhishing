@@ -1,8 +1,17 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.12.0
+  version: 0.13.0
   description: >
+    0.13.0 adds M8d domain intelligence & procurement: engagement-scoped domain
+    candidate discovery (POST /engagements/{id}/candidates/collect, async),
+    deterministic ranking with registrar price comparison (GET
+    /engagements/{id}/candidates, /registrars), and operator pick/reject
+    (select/reject). Discovery is gated like campaign launch (403/409) and
+    derives candidates only from the engagement's authorized_scope. Availability
+    and pricing always come from verifiable sources (OSINT RDAP + registrar APIs);
+    an optional LLM may only propose candidate names. No automated purchasing —
+    the operator buys the picked candidate externally and imports it via /domains.
     0.11.0 adds M8b/M8c domain inventory (/domains): manual import of externally
     purchased domains, TXT-based ownership verification (_phishforge.<domain>),
     assignment to engagements with a separate admin authorization step, a
@@ -509,6 +518,117 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { description: Already terminated, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /engagements/{id}/candidates/collect:
+    post:
+      operationId: collectCandidates
+      summary: Discover domain candidates for an engagement (operator, async)
+      description: >
+        M8d. Enqueues a background discovery run that suggests lookalike candidate
+        domains from the engagement's authorized_scope (via the OSINT service),
+        fetches comparable registrar price quotes, and scores + ranks each
+        candidate deterministically. Gated exactly like campaign launch: the
+        engagement must be authorized (403 otherwise), unexpired and
+        non-terminated (409 otherwise), and declare at least one authorized_scope
+        entry (409 otherwise). Returns 202; poll GET .../candidates for results.
+        No domain is ever purchased or registered — the operator picks a ranked
+        candidate, buys it externally, and imports it via POST /domains.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202":
+          description: Discovery queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: queued }
+                  engagement_id: { type: string, format: uuid }
+                  message: { type: string }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { description: Engagement not authorized, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Engagement expired/terminated, or no authorized_scope, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "503": { description: OSINT service not configured, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /engagements/{id}/candidates:
+    get:
+      operationId: listCandidates
+      summary: List an engagement's ranked domain candidates with price quotes (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK (ordered by rank ascending, nulls last)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/DomainCandidate" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /engagements/{id}/candidates/{cid}:
+    get:
+      operationId: getCandidate
+      summary: Get one domain candidate with its price quotes (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DomainCandidate" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /engagements/{id}/candidates/{cid}/select:
+    post:
+      operationId: selectCandidate
+      summary: Pick a candidate to purchase externally (operator) — -> 'selected'
+      description: Only a scored/suggested candidate can be selected (409 otherwise).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DomainCandidate" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Not selectable from the current status, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /engagements/{id}/candidates/{cid}/reject:
+    post:
+      operationId: rejectCandidate
+      summary: Dismiss a candidate (operator) — -> 'rejected'
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DomainCandidate" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Already rejected/imported, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /registrars:
+    get:
+      operationId: listRegistrars
+      summary: List the registrar catalog used for price comparison (operator)
+      description: Global, read-only registry of registrars that can be quoted from (porkbun/namecheap/cloudflare).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/RegistrarProvider" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /domains:
     post:
@@ -1799,6 +1919,67 @@ components:
             verified: { type: boolean }
         warnings: { type: array, items: { type: string } }
         errors:   { type: array, items: { type: string } }
+    CandidateScore:
+      type: object
+      description: >
+        Deterministic scoring breakdown (M8d). value is the comparable ranking
+        number (higher is better); it is a pure function of availability,
+        inventory conflict, and the cheapest 3-year registrar cost. Never from an
+        LLM.
+      properties:
+        value:              { type: number, description: "0..100; higher ranks better." }
+        availability_base:  { type: number }
+        cost_bonus:         { type: number }
+        available:          { type: boolean, nullable: true, description: "RDAP availability (null when unknown)." }
+        conflict:           { type: boolean, description: "True when the name already exists in the tenant's inventory (score 0)." }
+        min_cost_3y_cents:  { type: integer, nullable: true, description: "Cheapest 3-year cost (first year + 2 renewals) in cents." }
+        cheapest_registrar: { type: string }
+        currency:           { type: string }
+        reasons:            { type: array, items: { type: string } }
+    DomainPriceQuote:
+      type: object
+      description: A normalized registrar price quote for a candidate. Prices are integer cents; null means unpriced.
+      properties:
+        id:               { type: string, format: uuid }
+        candidate_id:     { type: string, format: uuid }
+        registrar:        { type: string }
+        currency:         { type: string }
+        first_year_cents: { type: integer, nullable: true }
+        renewal_cents:    { type: integer, nullable: true }
+        transfer_cents:   { type: integer, nullable: true }
+        available:        { type: boolean, nullable: true }
+        quoted_at:        { type: string, format: date-time }
+        created_at:       { type: string, format: date-time }
+    DomainCandidate:
+      type: object
+      description: A suggested candidate domain for an engagement, with a deterministic score and price quotes.
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        engagement_id: { type: string, format: uuid }
+        source:        { type: string, enum: [lookalike, llm], description: "Where the name came from. LLM names are advisory only." }
+        name:          { type: string }
+        fuzzer:        { type: string, nullable: true }
+        available:     { type: boolean, nullable: true }
+        score:         { $ref: "#/components/schemas/CandidateScore" }
+        rank:          { type: integer, nullable: true, description: "1-based; lower is better." }
+        status:        { type: string, enum: [suggested, scored, selected, rejected, imported] }
+        notes:         { type: string, nullable: true }
+        created_by:    { type: string, format: uuid, nullable: true }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+        quotes:        { type: array, items: { $ref: "#/components/schemas/DomainPriceQuote" } }
+    RegistrarProvider:
+      type: object
+      description: A registrar the platform can obtain comparable price quotes from.
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        api_kind:   { type: string, enum: [porkbun, namecheap, cloudflare, manual] }
+        enabled:    { type: boolean }
+        base_url:   { type: string, nullable: true }
+        notes:      { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
     ReportTotals:
       type: object
       description: >
