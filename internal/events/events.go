@@ -30,8 +30,26 @@ import (
 )
 
 // ErrInvalidTransition is returned when an event is not allowed from the
-// target's current state.
+// target's current state. Callers and tests rely on this sentinel, so it is
+// retained for transition (as opposed to catalog) rejections.
 var ErrInvalidTransition = errors.New("events: invalid state transition")
+
+// ErrUnknownChannelEvent is returned when a (channel, type) pair is not defined
+// in the event catalog. Unknown pairs fail closed — they are never recorded.
+var ErrUnknownChannelEvent = errors.New("events: unknown channel event")
+
+// Channel is an event_channel value: the delivery/authentication vector an
+// event belongs to. The email funnel is the only populated catalog today;
+// sms/qr/auth event types arrive in M9a/M9b.
+type Channel string
+
+const (
+	ChannelEmail  Channel = "email"
+	ChannelSMS    Channel = "sms"
+	ChannelQR     Channel = "qr"
+	ChannelAuth   Channel = "auth"
+	ChannelSystem Channel = "system"
+)
 
 // State is a campaign_targets.state value.
 type State string
@@ -91,33 +109,85 @@ var stateForType = map[Type]State{
 	TypeFailed:           StateFailed,
 }
 
-// nextState validates ev against cur and returns the resulting state and
-// whether the state advanced.
-func nextState(cur State, ev Type) (State, bool, error) {
+// specKind classifies how an event participates in the state machine.
+type specKind int
+
+const (
+	kindLinear   specKind = iota // forward-only progression (rank-ordered)
+	kindSide                     // recorded, never changes state (e.g. reported)
+	kindTerminal                 // early-terminal branch (bounced/failed)
+)
+
+// eventSpec is a catalog entry: how a (channel, type) pair validates and what
+// state it projects. rank is the linear rank for kindLinear (−1 = none);
+// projects is the state the event yields ("" = none, for side-channel events).
+type eventSpec struct {
+	rank     int
+	projects State
+	kind     specKind
+}
+
+// catalog is the channel-scoped event catalog. The email catalog is DERIVED
+// from linearRank/stateForType (kept as the single source of truth) so the
+// email funnel is provably unchanged. Non-email channels start empty and fail
+// closed — M9a/M9b add their entries here. Built once at init and read-only
+// thereafter.
+var catalog = buildCatalog()
+
+func buildCatalog() map[Channel]map[Type]eventSpec {
+	email := make(map[Type]eventSpec, len(stateForType)+1)
+	for ev, st := range stateForType {
+		if ev == TypeBounced || ev == TypeFailed {
+			email[ev] = eventSpec{rank: -1, projects: st, kind: kindTerminal}
+			continue
+		}
+		email[ev] = eventSpec{rank: linearRank[st], projects: st, kind: kindLinear}
+	}
+	// reported is a side-channel event: recorded, no projection.
+	email[TypeReported] = eventSpec{rank: -1, projects: "", kind: kindSide}
+
+	return map[Channel]map[Type]eventSpec{
+		ChannelEmail:  email,
+		ChannelSMS:    {},
+		ChannelQR:     {},
+		ChannelAuth:   {},
+		ChannelSystem: {},
+	}
+}
+
+// nextState validates ev on channel ch against cur and returns the resulting
+// state and whether the state advanced. Unknown (channel, type) pairs return
+// ErrUnknownChannelEvent (fail closed); disallowed transitions for a known pair
+// return ErrInvalidTransition.
+func nextState(cur State, ev Type, ch Channel) (State, bool, error) {
+	chCatalog, ok := catalog[ch]
+	if !ok {
+		return cur, false, fmt.Errorf("%w: channel %q", ErrUnknownChannelEvent, ch)
+	}
+	spec, ok := chCatalog[ev]
+	if !ok {
+		return cur, false, fmt.Errorf("%w: channel %q type %q", ErrUnknownChannelEvent, ch, ev)
+	}
+
+	// A terminal current state rejects everything, including side-channel events.
 	if cur == StateBounced || cur == StateFailed {
 		return cur, false, ErrInvalidTransition
 	}
-	switch ev {
-	case TypeReported:
+
+	switch spec.kind {
+	case kindSide:
 		return cur, false, nil
-	case TypeBounced, TypeFailed:
+	case kindTerminal:
+		// Early-terminal branch: valid only while still at pending or sent.
 		if linearRank[cur] > linearRank[StateSent] {
 			return cur, false, ErrInvalidTransition
 		}
-		return stateForType[ev], true, nil
-	default:
-		ns, ok := stateForType[ev]
-		if !ok {
-			return cur, false, fmt.Errorf("events: unknown event type %q", ev)
-		}
-		nr, ok := linearRank[ns]
-		if !ok {
+		return spec.projects, true, nil
+	default: // kindLinear
+		if spec.rank < linearRank[cur] {
 			return cur, false, ErrInvalidTransition
 		}
-		if nr < linearRank[cur] {
-			return cur, false, ErrInvalidTransition
-		}
-		return ns, ns != cur, nil
+		return spec.projects, spec.projects != cur, nil
 	}
 }
 
@@ -128,6 +198,9 @@ type NewEvent struct {
 	CampaignID uuid.UUID
 	ContactID  uuid.UUID
 	Type       Type
+	// Channel is the event vector. The zero value is treated as ChannelEmail
+	// in Append, so existing callers that do not set it are unaffected.
+	Channel    Channel
 	Metadata   map[string]any
 	OccurredAt time.Time
 }
@@ -139,6 +212,7 @@ type Event struct {
 	CampaignID uuid.UUID  `json:"campaign_id"`
 	ContactID  *uuid.UUID `json:"contact_id,omitempty"`
 	Type       Type       `json:"type"`
+	Channel    Channel    `json:"channel"`
 	State      State      `json:"state"`
 	OccurredAt time.Time  `json:"occurred_at"`
 	CreatedAt  time.Time  `json:"created_at"`
@@ -157,7 +231,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // Event.State field is left empty.
 func (r *Repository) ListByTenant(ctx context.Context, tenantID uuid.UUID, limit int) ([]Event, error) {
 	const sql = `
-SELECT id, tenant_id, campaign_id, contact_id, type::text, occurred_at, created_at
+SELECT id, tenant_id, campaign_id, contact_id, type::text, channel::text, occurred_at, created_at
 FROM events WHERE tenant_id = $1 ORDER BY occurred_at DESC LIMIT $2`
 	rows, err := r.pool.Query(ctx, sql, tenantID, limit)
 	if err != nil {
@@ -170,12 +244,14 @@ FROM events WHERE tenant_id = $1 ORDER BY occurred_at DESC LIMIT $2`
 		var (
 			ev      Event
 			typeStr string
+			chStr   string
 			cu      uuid.NullUUID
 		)
-		if err := rows.Scan(&ev.ID, &ev.TenantID, &ev.CampaignID, &cu, &typeStr, &ev.OccurredAt, &ev.CreatedAt); err != nil {
+		if err := rows.Scan(&ev.ID, &ev.TenantID, &ev.CampaignID, &cu, &typeStr, &chStr, &ev.OccurredAt, &ev.CreatedAt); err != nil {
 			return nil, fmt.Errorf("events: scan: %w", err)
 		}
 		ev.Type = Type(typeStr)
+		ev.Channel = Channel(chStr)
 		if cu.Valid {
 			id := cu.UUID
 			ev.ContactID = &id
@@ -194,6 +270,11 @@ FROM events WHERE tenant_id = $1 ORDER BY occurred_at DESC LIMIT $2`
 func (r *Repository) Append(ctx context.Context, in NewEvent) (Event, error) {
 	if in.OccurredAt.IsZero() {
 		in.OccurredAt = time.Now().UTC()
+	}
+	// Default the channel to email so existing callers that do not set it are
+	// unaffected (the email catalog is the only populated one today).
+	if in.Channel == "" {
+		in.Channel = ChannelEmail
 	}
 	hasContact := in.ContactID != uuid.Nil
 
@@ -221,7 +302,7 @@ func (r *Repository) Append(ctx context.Context, in NewEvent) (Event, error) {
 		}
 	}
 
-	ns, _, err := nextState(cur, in.Type)
+	ns, _, err := nextState(cur, in.Type, in.Channel)
 	if err != nil {
 		return Event{}, err
 	}
@@ -243,18 +324,20 @@ func (r *Repository) Append(ctx context.Context, in NewEvent) (Event, error) {
 	var (
 		ev      Event
 		typeStr string
+		chStr   string
 		cu      uuid.NullUUID
 	)
 	const ins = `
-INSERT INTO events (tenant_id, campaign_id, contact_id, type, metadata, occurred_at)
-VALUES ($1, $2, $3, $4::event_type, $5::jsonb, $6)
-RETURNING id, tenant_id, campaign_id, contact_id, type::text, occurred_at, created_at`
+INSERT INTO events (tenant_id, campaign_id, contact_id, type, channel, metadata, occurred_at)
+VALUES ($1, $2, $3, $4::event_type, $5::event_channel, $6::jsonb, $7)
+RETURNING id, tenant_id, campaign_id, contact_id, type::text, channel::text, occurred_at, created_at`
 	if err := tx.QueryRow(ctx, ins,
-		in.TenantID, in.CampaignID, contactArg, string(in.Type), meta, in.OccurredAt).
-		Scan(&ev.ID, &ev.TenantID, &ev.CampaignID, &cu, &typeStr, &ev.OccurredAt, &ev.CreatedAt); err != nil {
+		in.TenantID, in.CampaignID, contactArg, string(in.Type), string(in.Channel), meta, in.OccurredAt).
+		Scan(&ev.ID, &ev.TenantID, &ev.CampaignID, &cu, &typeStr, &chStr, &ev.OccurredAt, &ev.CreatedAt); err != nil {
 		return Event{}, fmt.Errorf("events: insert: %w", err)
 	}
 	ev.Type = Type(typeStr)
+	ev.Channel = Channel(chStr)
 	ev.State = ns
 	if cu.Valid {
 		id := cu.UUID

@@ -171,6 +171,7 @@ func (s *Sender) SendCampaign(ctx context.Context, tenantID, campaignID uuid.UUI
 				CampaignID: campaignID,
 				ContactID:  t.contactID,
 				Type:       evType,
+				Channel:    events.ChannelEmail,
 				Metadata:   meta,
 			})
 

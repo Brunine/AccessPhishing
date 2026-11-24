@@ -65,6 +65,57 @@ Victim state machine: sent → delivered → opened → clicked → creds → se
 - Every new endpoint: RBAC middleware + audit log entry.
 
 ## PROJECT STATE
+- Milestone: Event taxonomy v2 — channel-agnostic events (MECHANISM ONLY).
+  COMPLETE. Adds a channel dimension + a Go-side event catalog so SMS/QR/auth
+  events can be appended in future milestones without disturbing the email
+  funnel. NO externally visible behavior change for email: same accepted/
+  rejected transitions, same projected campaign_targets.state, same report
+  aggregation. Concrete SMS/QR event TYPES are out of scope — they arrive in
+  M9a/M9b (which add catalog entries, and enum values via their own migrations).
+- Done (event taxonomy v2 — mechanism):
+  - Migration 0016 (additive): event_channel enum (email|sms|qr|auth|system);
+    events.channel NOT NULL DEFAULT 'email' (backfills every existing row — no
+    separate backfill); idx_events_channel on (channel). A composite
+    (tenant_id, channel) index was deliberately omitted (current report queries
+    group/filter by type, email-only today). event_type is NOT touched. The
+    append-only trigger is untouched (ADD COLUMN only). .down.sql drops the
+    index, column, and type.
+  - internal/events: new Channel type + 5 constants; ErrUnknownChannelEvent
+    sentinel (ErrInvalidTransition retained for transition rejections). New
+    eventSpec{rank,projects,kind} + catalog map[Channel]map[Type]eventSpec,
+    DERIVED from the existing linearRank/stateForType maps (kept as the single
+    source of truth) via buildCatalog(). email catalog = the 9 existing types
+    (linear + bounced/failed terminal) + reported (side); non-email catalogs
+    are EMPTY and fail closed. nextState gained a channel param: unknown
+    (channel,type) -> ErrUnknownChannelEvent; disallowed known transition ->
+    ErrInvalidTransition (exact prior email semantics preserved). NewEvent/Event
+    gained Channel; Append defaults a zero Channel to email and writes/returns
+    channel; ListByTenant selects channel.
+  - Call sites: tracking (recordTracking), bounce ingest, delivery worker now
+    pass Channel: events.ChannelEmail explicitly. Engine capture ingest
+    (handlers_engine_events.go) carries no channel notion, so it LEAVES the
+    zero value defaulting to email (noted — no campaign-channel plumbing
+    invented in this task). internal/report untouched: its aggregations
+    filter/group by type (email-only today), so output is identical; no
+    channel filter added (would be a no-op now).
+  - Tests: internal/events/events_test.go (no DB) — exhaustive email-equivalence
+    sweep comparing the new channel-scoped nextState against an inline copy of
+    the pre-refactor nextState across ALL state x type pairs; explicit boundary
+    cases (rank equality, skip-forward, regression, reported side-channel,
+    bounced/failed from pending/sent and rejected past sent, terminal rejects
+    all); non-email fail-closed (every type on sms/qr/auth/system + an unknown
+    channel -> ErrUnknownChannelEvent); catalog shape. test/integration/
+    events_channel_test.go — email /t click records channel='email' (unchanged
+    result), zero-channel repo append defaults to email, QR append ->
+    ErrUnknownChannelEvent with no row written, SELECT DISTINCT channel = email
+    only. Existing launch/send/report/bounce suites unchanged (no assertion
+    edits — email behavior identical; zero-channel appends still default email).
+  - No API spec change (OpenAPI stays 0.10.0); no web/ change.
+  - Verification: go build/vet clean; gofmt-clean (touched files); internal unit
+    tests green (incl. the equivalence sweep). FULL integration suite PENDING a
+    local Postgres — Docker Desktop was down at implementation time (orphaned
+    wslrelay on :5432); the throwaway-DB harness applies 0016 like every other
+    migration, so the suite runs once Docker is back.
 - Milestone: M8a — engagements as the authorization container for campaigns.
   COMPLETE. Scope chosen: a full engagement lifecycle (operator requests ->
   admin authorizes) with an emergency-stop (terminate), plus a server-side gate
