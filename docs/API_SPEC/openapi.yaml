@@ -1,8 +1,20 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.18.0
+  version: 0.19.0
   description: >
+    0.19.0 adds M8b domain hardening. (1) A worker job periodically rolls domains
+    whose registration has lapsed (expires_at past) from verified/active/suspended
+    to 'expired', tenant-wide, auditing each row (domain.expire) — the stored
+    status now reflects expiry without an operator (see ADR-0002). (2) GET
+    /domains/{id}/diagnostics now derives and persists a tls_status
+    (valid|expiring|invalid) from the live TLS probe, auditing (domain.tls_status)
+    only when it changes; the diagnostics response gains a tls_status field. The
+    domain lifecycle status is never changed by TLS results. (3) GET
+    /engagements/{id}/domains lists the domains assigned to an engagement
+    (excludes revoked assignments) with assignment_status and authorized_at.
+    No schema migration. (NB: 0.19.0 is also used by the in-flight M8a clients
+    branch; whichever merges second renumbers.)
     0.17.0 adds M5 Phase 2: AiTM clone rendering. Proxy start now generates a
     static clone of the campaign's phishing_facet login page (fetched from the
     profile's upstream host, bounded, redirect-free), rewrites it so the login
@@ -711,6 +723,31 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { description: Not allowed from the current status, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
+  /engagements/{id}/domains:
+    get:
+      operationId: listEngagementDomains
+      summary: List domains assigned to an engagement (operator)
+      description: >
+        M8b. Tenant-scoped join of domain_assignments to domains, excluding
+        revoked assignments, ordered by domain name. Each item is a domain
+        summary plus its assignment_status and authorized_at. A cross-tenant or
+        unknown engagement id is 404.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/EngagementDomain" } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /engagements/{id}/authorize:
     post:
       operationId: authorizeEngagement
@@ -1116,11 +1153,15 @@ paths:
       operationId: domainDiagnostics
       summary: Live DNS/TLS diagnostics for a domain (operator)
       description: >
-        Read-only (no audit). Runs nameserver/SPF/DMARC lookups and a TLS
-        handshake on port 443 against the stored domain name only (never a
-        user-supplied host). DKIM is null (no selector configured yet). Lookup
-        failures populate errors[]; soft issues (e.g. missing SPF on a verified
-        domain) populate warnings[]; a non-resolving domain still returns 200.
+        Runs nameserver/SPF/DMARC lookups and a TLS handshake on port 443
+        against the stored domain name only (never a user-supplied host). DKIM is
+        null (no selector configured yet). Lookup failures populate errors[]; soft
+        issues (e.g. missing SPF on a verified domain) populate warnings[]; a
+        non-resolving domain still returns 200. M8b: the TLS probe derives a
+        tls_status (valid | expiring within the configured threshold | invalid on
+        TLS error), returned as the tls_status field and persisted on the domain;
+        a change from the stored value is audited (domain.tls_status). The domain
+        lifecycle status is never changed by TLS results.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -2243,6 +2284,20 @@ components:
         created_by:    { type: string, format: uuid }
         created_at:    { type: string, format: date-time }
         updated_at:    { type: string, format: date-time }
+    EngagementDomain:
+      type: object
+      description: >
+        A domain summary joined with its non-revoked assignment to an engagement
+        (returned by GET /engagements/{id}/domains).
+      properties:
+        domain_id:         { type: string, format: uuid }
+        name:              { type: string }
+        status:            { $ref: "#/components/schemas/DomainStatus" }
+        tls_status:        { type: string, nullable: true }
+        expires_at:        { type: string, format: date-time, nullable: true }
+        assignment_id:     { type: string, format: uuid }
+        assignment_status: { type: string, enum: [pending, authorized] }
+        authorized_at:     { type: string, format: date-time, nullable: true }
     DomainAssignment:
       type: object
       description: Binds a domain to an engagement. Operator attaches (pending); admin authorizes.

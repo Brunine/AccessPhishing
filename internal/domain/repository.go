@@ -142,6 +142,22 @@ func (r *Repository) SetStatus(ctx context.Context, q db.Querier, tenantID, id u
 	return d, nil
 }
 
+// UpdateTLSStatus persists a derived tls_status for a domain, scoped by tenant.
+// It is a narrow write that never touches the lifecycle status; values are
+// constrained by the 0017 domains.tls_status CHECK. Returns ErrNotFound when no
+// row matched.
+func (r *Repository) UpdateTLSStatus(ctx context.Context, q db.Querier, tenantID, id uuid.UUID, status string) error {
+	const sql = `UPDATE domains SET tls_status = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`
+	tag, err := q.Exec(ctx, sql, tenantID, id, status)
+	if err != nil {
+		return fmt.Errorf("domain: update tls status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Delete hard-deletes a domain row within a tenant. The caller enforces the
 // status precondition (CanDelete). Returns ErrNotFound when nothing matched.
 func (r *Repository) Delete(ctx context.Context, q db.Querier, tenantID, id uuid.UUID) error {
@@ -257,6 +273,39 @@ func (r *Repository) SetAssignmentStatus(ctx context.Context, q db.Querier, tena
 		return Assignment{}, fmt.Errorf("domain: set assignment status: %w", err)
 	}
 	return a, nil
+}
+
+// ListByEngagement returns the domains assigned to an engagement within a
+// tenant, excluding revoked assignments, ordered by domain name. Each row pairs
+// a domain summary with its assignment status and authorized_at.
+func (r *Repository) ListByEngagement(ctx context.Context, q db.Querier, tenantID, engagementID uuid.UUID) ([]EngagementDomain, error) {
+	const sql = `
+	SELECT d.id, d.name, d.status, d.tls_status, d.expires_at,
+	       a.id, a.status, a.authorized_at
+	FROM domain_assignments a
+	JOIN domains d ON d.id = a.domain_id
+	WHERE a.tenant_id = $1 AND a.engagement_id = $2 AND a.status <> 'revoked'
+	ORDER BY d.name ASC`
+	rows, err := q.Query(ctx, sql, tenantID, engagementID)
+	if err != nil {
+		return nil, fmt.Errorf("domain: list by engagement: %w", err)
+	}
+	defer rows.Close()
+	out := make([]EngagementDomain, 0)
+	for rows.Next() {
+		var e EngagementDomain
+		if err := rows.Scan(
+			&e.DomainID, &e.Name, &e.Status, &e.TLSStatus, &e.ExpiresAt,
+			&e.AssignmentID, &e.AssignmentStatus, &e.AuthorizedAt,
+		); err != nil {
+			return nil, fmt.Errorf("domain: scan engagement domain: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("domain: iterate engagement domains: %w", err)
+	}
+	return out, nil
 }
 
 // --- verifications --------------------------------------------------------

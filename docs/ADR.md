@@ -102,3 +102,70 @@ platform already enforces.
    is not the form-capture model; v1 recognizes but does not implement these.
 3. **Profile-change propagation.** Read-current + audit (recommended) vs.
    snapshot-at-launch — see the recommendation above.
+
+---
+
+## ADR-0002 — Domain expiry is a scheduled roll, not derive-and-read (M8b hardening)
+
+**Status:** Accepted — 2026-11-25. Implemented. Supersedes the derive-and-note
+deferral recorded in the `0017_domains` migration header.
+
+### Context
+
+The `0017_domains` migration header deliberately deferred automatic expiry:
+
+> `'authorized'/'expired' are reserved/derived labels` … `A background job to
+> roll rows to 'expired' from expires_at is out of scope here (derive-and-note,
+> never auto-mutate).`
+
+So today a domain whose `expires_at` has passed keeps its stored status
+(`verified`/`active`/`suspended`); expiry is surfaced only on read
+(`Domain.IsExpiredByDate`) and applied to the stored status only when an
+operator PATCHes it, and only from `active`/`verified` (the interactive
+transition guard, `internal/domain.allowed`, does not offer `suspended →
+expired`). That was fine while the inventory was small and every status change
+was operator-driven, but it means the stored status silently diverges from
+reality, reports must special-case the derived signal, and a lapsed `suspended`
+domain can never reach `expired` at all.
+
+### Decision
+
+1. **Scheduled roll over derive-and-read.** A worker job
+   (`internal/domain.Roller`, wired in `cmd/worker`) periodically executes
+   `UPDATE domains SET status='expired' WHERE expires_at < now() AND status IN
+   ('verified','active','suspended')`. The stored status becomes the single
+   source of truth; readers and reports no longer re-derive expiry. Default
+   cadence is 1h (`DOMAIN_EXPIRY_ROLL_INTERVAL`), and the whole job is
+   disableable (`DOMAIN_EXPIRY_ROLL_DISABLED`) to fall back to derive-and-read.
+
+2. **Idempotent and batched.** Each pass locks and transitions at most
+   `ExpiryBatchSize` (500) rows via `FOR UPDATE SKIP LOCKED`, draining the
+   backlog in bounded batches; re-running changes nothing once drained.
+
+3. **Non-interactive system sweep, outside the transition guard.** The roll is a
+   direct bulk UPDATE, intentionally *not* routed through `SetStatus`/`allowed`.
+   This is what lets it expire `suspended` domains — a transition the
+   operator-facing lifecycle does not offer — because a lapsed registration is a
+   global fact, not an operator decision. The interactive guard continues to
+   govern operator actions unchanged; `allowed` is **not** modified.
+
+4. **Not tenant-scoped; audited per row.** One pass sweeps every tenant. Each
+   transitioned row gets an append-only audit entry (`domain.expire`, system
+   actor, `{from,to}` metadata) committed in the same transaction as the status
+   change, so the trail never diverges from the mutation.
+
+### Consequences
+
+- **+** Stored status reflects reality without an operator in the loop; reports
+  and gates read one value.
+- **+** `suspended` domains finally reach `expired`; audit trail is complete and
+  attributable to the system sweep.
+- **+** Reversible: disable the job and the prior derive-and-note behavior (still
+  present on the read path) resumes.
+- **−** A domain can change status with no operator action — surprising if one
+  forgets the job exists; mitigated by the audit entry and the summary log line.
+- **−** The roll reaches a state (`suspended → expired`) the interactive API
+  cannot, so the two paths are not symmetric by design; documented here and in
+  the `Roller` doc comment so it is not mistaken for a guard bug.
+- **−** Up to one interval of staleness between lapse and roll; acceptable for a
+  registration-expiry signal and tunable via the interval.

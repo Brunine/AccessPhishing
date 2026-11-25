@@ -100,6 +100,13 @@ type Deps struct {
 	// AITMProxyCloneTimeout bounds each clone fetch of the upstream login page.
 	// Zero defaults to 15s.
 	AITMProxyCloneTimeout time.Duration
+	// TLSInspector probes a host's leaf certificate for domain diagnostics; nil
+	// uses dnsdiag.TLS. Injected in tests to supply a certificate with a known
+	// NotAfter. Like the DNS resolver, it is only ever given a stored domain name.
+	TLSInspector func(ctx context.Context, host string, port int, timeout time.Duration) (dnsdiag.TLSInfo, error)
+	// TLSExpiringThreshold is how close to a cert's NotAfter the derived
+	// tls_status flips from "valid" to "expiring". Zero defaults to 30 days.
+	TLSExpiringThreshold time.Duration
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -120,6 +127,8 @@ type Server struct {
 	candidates   *candidate.Repository
 	resolver     dnsdiag.Resolver
 	diagTimeout  time.Duration
+	tlsInspect   func(ctx context.Context, host string, port int, timeout time.Duration) (dnsdiag.TLSInfo, error)
+	tlsThreshold time.Duration
 	qrSize       int
 	qrECLevel    string
 	contacts     *contact.Repository
@@ -153,6 +162,14 @@ func NewServer(d Deps) *Server {
 	diagTimeout := d.DiagTimeout
 	if diagTimeout <= 0 {
 		diagTimeout = 10 * time.Second
+	}
+	tlsInspect := d.TLSInspector
+	if tlsInspect == nil {
+		tlsInspect = dnsdiag.TLS
+	}
+	tlsThreshold := d.TLSExpiringThreshold
+	if tlsThreshold <= 0 {
+		tlsThreshold = 30 * 24 * time.Hour
 	}
 	qrSize := d.QRSize
 	if qrSize <= 0 {
@@ -207,6 +224,8 @@ func NewServer(d Deps) *Server {
 		candidates:   candidate.NewRepository(),
 		resolver:     resolver,
 		diagTimeout:  diagTimeout,
+		tlsInspect:   tlsInspect,
+		tlsThreshold: tlsThreshold,
 		qrSize:       qrSize,
 		qrECLevel:    qrECLevel,
 		contacts:     contact.NewRepository(),
@@ -312,6 +331,9 @@ func (s *Server) Router() http.Handler {
 				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}", s.getEngagement)
 				r.With(auth.RequireRole(auth.RoleOperator)).Patch("/{id}", s.patchEngagement)
 				r.With(auth.RequireRole(auth.RoleOperator)).Post("/{id}/request-authorization", s.requestEngagementAuthorization)
+				// M8b hardening: domains assigned to this engagement (operator,
+				// read-only; excludes revoked assignments).
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}/domains", s.listEngagementDomains)
 				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/authorize", s.authorizeEngagement)
 				r.With(auth.RequireRole(auth.RoleAdmin)).Post("/{id}/terminate", s.terminateEngagement)
 

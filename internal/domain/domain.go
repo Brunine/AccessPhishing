@@ -107,6 +107,19 @@ type Assignment struct {
 	UpdatedAt    time.Time        `json:"updated_at"`
 }
 
+// EngagementDomain is a domain summary joined with its (non-revoked) assignment
+// to an engagement, returned by the engagement domain listing.
+type EngagementDomain struct {
+	DomainID         uuid.UUID        `json:"domain_id"`
+	Name             string           `json:"name"`
+	Status           Status           `json:"status"`
+	TLSStatus        *string          `json:"tls_status,omitempty"`
+	ExpiresAt        *time.Time       `json:"expires_at,omitempty"`
+	AssignmentID     uuid.UUID        `json:"assignment_id"`
+	AssignmentStatus AssignmentStatus `json:"assignment_status"`
+	AuthorizedAt     *time.Time       `json:"authorized_at,omitempty"`
+}
+
 // Verification is one TXT ownership challenge.
 type Verification struct {
 	ID            uuid.UUID          `json:"id"`

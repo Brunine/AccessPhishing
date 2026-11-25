@@ -17,6 +17,7 @@ import (
 	"phishforge/internal/crypto"
 	"phishforge/internal/db"
 	"phishforge/internal/delivery"
+	"phishforge/internal/domain"
 	"phishforge/internal/engagement"
 	"phishforge/internal/enginehealth"
 	"phishforge/internal/events"
@@ -207,6 +208,34 @@ func main() {
 		}
 	}()
 	logger.Info("engine health poller started", "interval", cfg.EngineHealthPollInterval)
+
+	// Domain expiry roll: periodically roll domains whose registration has
+	// lapsed (expires_at past) to 'expired', tenant-wide, with a per-row audit
+	// entry. Mirrors the pollers' goroutine-ticker pattern; disableable via
+	// DOMAIN_EXPIRY_ROLL_DISABLED.
+	if cfg.DomainExpiryRollDisabled {
+		logger.Info("domain expiry roll disabled")
+	} else {
+		roller := domain.NewRoller(pool)
+		go func() {
+			ticker := time.NewTicker(cfg.DomainExpiryRollInterval)
+			defer ticker.Stop()
+			for {
+				n, err := roller.RollOnce(ctx)
+				if err != nil {
+					logger.Error("domain expiry roll failed", "err", err)
+				} else if n > 0 {
+					logger.Info("domain expiry roll", "expired", n)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		logger.Info("domain expiry roll started", "interval", cfg.DomainExpiryRollInterval)
+	}
 
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},

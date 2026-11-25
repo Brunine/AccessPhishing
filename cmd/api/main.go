@@ -101,6 +101,7 @@ func main() {
 		AITMProxyPortMax:      cfg.AITMProxyPortMax,
 		AITMProxyCloneDir:     cfg.AITMProxyCloneDir,
 		AITMProxyCloneTimeout: cfg.AITMProxyCloneTimeout,
+		TLSExpiringThreshold:  cfg.DomainTLSExpiringThreshold,
 	})
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
