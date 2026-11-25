@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"phishforge/internal/aitmproxy"
 	"phishforge/internal/apikey"
 	"phishforge/internal/approval"
 	"phishforge/internal/auth"
@@ -85,6 +86,10 @@ type Deps struct {
 	QRSize int
 	// QRECLevel is the QR error-correction level (L|M|Q|H); empty defaults to M.
 	QRECLevel string
+	// AITMProxyPortMin/Max bound the port range the in-process AiTM proxies
+	// (M5) bind one-per-campaign. A zero/invalid range defaults to 9100–9199.
+	AITMProxyPortMin int
+	AITMProxyPortMax int
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -123,6 +128,7 @@ type Server struct {
 	osint        OSINTClient
 	osintResults *osintresult.Repository
 	users        *user.Repository
+	aitm         *aitmproxy.Manager
 }
 
 // NewServer constructs an API server from its dependencies.
@@ -189,8 +195,13 @@ func NewServer(d Deps) *Server {
 		osint:        d.OSINT,
 		osintResults: osintresult.NewRepository(),
 		users:        user.NewRepository(),
+		aitm:         aitmproxy.NewManager(d.AITMProxyPortMin, d.AITMProxyPortMax, nil),
 	}
 }
+
+// AITMProxies exposes the AiTM proxy manager so the process can stop every live
+// proxy on graceful shutdown.
+func (s *Server) AITMProxies() *aitmproxy.Manager { return s.aitm }
 
 // Router builds the root http.Handler with base middleware and routes.
 func (s *Server) Router() http.Handler {
@@ -233,6 +244,13 @@ func (s *Server) Router() http.Handler {
 				r.Post("/{id}/send", s.sendCampaign)
 				r.Post("/{id}/engine", s.bindEngine)
 				r.Get("/{id}/engine", s.getEngineForCampaign)
+				// M5 Phase 1: in-process AiTM reverse-proxy lifecycle (operator).
+				// start compiles the campaign's bound profile + InstantiateFlow
+				// gate (409/501) and binds to the campaign's engagement; stop
+				// tears down; status is read-only.
+				r.Post("/{id}/proxy/start", s.startCampaignProxy)
+				r.Post("/{id}/proxy/stop", s.stopCampaignProxy)
+				r.Get("/{id}/proxy/status", s.proxyStatus)
 				// M8 reporting: read-only KPI aggregates (operator).
 				r.Get("/{id}/report", s.campaignReport)
 				r.Get("/{id}/report.csv", s.campaignReportCSV)

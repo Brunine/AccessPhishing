@@ -271,6 +271,28 @@ func (r *Repository) ProfileStampByCampaignID(ctx context.Context, q db.Querier,
 	return checksum, version, nil
 }
 
+// AppProfileBindingByID returns the application profile a campaign is bound to
+// (set at launch via SetLaunchProfile), tenant-scoped. The pointer is nil when
+// the campaign was launched without a bound profile. Used by the M5 AiTM proxy
+// to resolve which profile to compile and serve.
+func (r *Repository) AppProfileBindingByID(ctx context.Context, q db.Querier, tenantID, campaignID uuid.UUID) (*uuid.UUID, error) {
+	var ap uuid.NullUUID
+	err := q.QueryRow(ctx,
+		`SELECT app_profile_id FROM campaigns WHERE tenant_id = $1 AND id = $2`,
+		tenantID, campaignID).Scan(&ap)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("campaign: app profile binding: %w", err)
+	}
+	if ap.Valid {
+		id := ap.UUID
+		return &id, nil
+	}
+	return nil, nil
+}
+
 // SetEngine binds (engineID non-nil) or unbinds (nil) an engine to a
 // campaign. Returns ErrNotFound if the campaign does not exist.
 func (r *Repository) SetEngine(ctx context.Context, q db.Querier, tenantID, campaignID uuid.UUID, engineID *uuid.UUID) error {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -133,7 +134,7 @@ func (s *Server) engineEvents(w http.ResponseWriter, r *http.Request) {
 			if perr != nil {
 				rawPayload = []byte("null")
 			}
-			st, detail := s.ingestEngineEvent(r, evTypeFromProxyKind(pe.Kind), pe.Token, pe.TS, rawPayload)
+			st, detail := s.ingestCapture(r.Context(), evTypeFromProxyKind(pe.Kind), pe.Token, pe.TS, rawPayload, "engine")
 			if st == "accepted" {
 				accepted++
 			}
@@ -154,7 +155,7 @@ func (s *Server) engineEvents(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "body is neither a batch envelope nor a single event")
 		return
 	}
-	st, detail := s.ingestEngineEvent(r, events.Type(in.Type), in.Token, orNow(in.OccurredAt), in.Payload)
+	st, detail := s.ingestCapture(r.Context(), events.Type(in.Type), in.Token, orNow(in.OccurredAt), in.Payload, "engine")
 	if st != "accepted" {
 		code := http.StatusBadRequest
 		switch st {
@@ -188,20 +189,23 @@ func orNow(t *time.Time) time.Time {
 	return time.Time{} // zero => events.Append applies now()
 }
 
-// ingestEngineEvent processes one capture event end-to-end and returns a
-// per-item status. It never writes HTTP responses; batch and legacy callers
-// translate statuses differently.
-func (s *Server) ingestEngineEvent(r *http.Request, evType events.Type, token string, occurredAt time.Time, payload json.RawMessage) (status, detail string) {
+// ingestCapture processes one capture event end-to-end and returns a per-item
+// status. It never writes HTTP responses; batch and legacy callers translate
+// statuses differently. source attributes the event ("engine" for the external
+// engine reporter, "proxy" for the in-process AiTM proxy); it is recorded in the
+// event metadata but never widens the names-only boundary (sanitizeEnginePayload
+// is applied regardless of source). ctx carries cancellation/deadline only.
+func (s *Server) ingestCapture(ctx context.Context, evType events.Type, token string, occurredAt time.Time, payload json.RawMessage, source string) (status, detail string) {
 	if evType == "" || (evType != events.TypeCreds && evType != events.TypeSessionHijacked) {
-		return "invalid", "kind must be creds or session (engines are capture-only)"
+		return "invalid", "kind must be creds or session (capture-only)"
 	}
 	if token == "" {
 		return "invalid", "recipient_token is required"
 	}
 
-	rec, err := s.recipients.GetByToken(r.Context(), s.pool, token)
+	rec, err := s.recipients.GetByToken(ctx, s.pool, token)
 	if errors.Is(err, recipient.ErrNotFound) {
-		// Per-item soft-fail: the proxy cannot fix a stale token and must not
+		// Per-item soft-fail: the caller cannot fix a stale token and must not
 		// be made to retry the batch forever.
 		return "unknown_token", "unknown recipient token"
 	}
@@ -212,7 +216,7 @@ func (s *Server) ingestEngineEvent(r *http.Request, evType events.Type, token st
 	// Integrity check: the recipient's contact must still exist in the
 	// recipient's tenant (defense against stale snapshots).
 	if rec.ContactID != uuid.Nil {
-		if _, err := s.contacts.GetByID(r.Context(), s.pool, rec.TenantID, rec.ContactID); err != nil {
+		if _, err := s.contacts.GetByID(ctx, s.pool, rec.TenantID, rec.ContactID); err != nil {
 			if errors.Is(err, contact.ErrNotFound) {
 				return "unknown_token", "recipient contact no longer exists"
 			}
@@ -225,14 +229,17 @@ func (s *Server) ingestEngineEvent(r *http.Request, evType events.Type, token st
 	if err != nil {
 		return "invalid", err.Error()
 	}
-	meta["source"] = "engine"
+	if source == "" {
+		source = "engine"
+	}
+	meta["source"] = source
 
 	// Forensic stamp (M10b ruling 3): copy the campaign's launch-time profile
 	// checksum + version onto every creds / session_hijacked event. Frozen at
 	// launch, so a later profile import never changes an in-flight campaign's
 	// stamp. Best-effort: a campaign launched without a bound profile has no
 	// stamp and the keys are simply absent.
-	if cs, ver, perr := s.campaigns.ProfileStampByCampaignID(r.Context(), s.pool, rec.CampaignID); perr == nil {
+	if cs, ver, perr := s.campaigns.ProfileStampByCampaignID(ctx, s.pool, rec.CampaignID); perr == nil {
 		if cs != nil {
 			meta["profile_checksum"] = *cs
 		}
@@ -251,7 +258,7 @@ func (s *Server) ingestEngineEvent(r *http.Request, evType events.Type, token st
 	if !occurredAt.IsZero() {
 		ev.OccurredAt = occurredAt
 	}
-	if _, err := s.events.Append(r.Context(), ev); err != nil {
+	if _, err := s.events.Append(ctx, ev); err != nil {
 		if errors.Is(err, events.ErrInvalidTransition) {
 			return "conflict", "event not allowed from the target's current state"
 		}
