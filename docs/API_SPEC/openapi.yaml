@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.17.0
+  version: 0.18.0
   description: >
     0.17.0 adds M5 Phase 2: AiTM clone rendering. Proxy start now generates a
     static clone of the campaign's phishing_facet login page (fetched from the
@@ -13,6 +13,13 @@ info:
     gains clone_snapshot_hash, clone_generated_at, and upstream_fetch_ok, and the
     snapshot hash is stamped onto creds/session_hijacked events alongside
     profile_checksum. No new endpoints.
+    0.18.0 adds M8a Phase 1 clients (/clients): first-class, tenant-scoped
+    customer records (name unique per tenant, optional contact_email + notes)
+    with full CRUD (operator; admin inherits). An engagement gains an optional,
+    nullable client_id binding (the denormalized client_name is retained and
+    unchanged); binding to a client_id outside the tenant is rejected (400). A
+    client cannot be deleted while any engagement references it (409); a
+    cross-tenant client id is 404. No engagement lifecycle change.
     0.16.0 adds M5 Phase 1: the in-process AiTM reverse proxy. POST
     /campaigns/{id}/proxy/start compiles the campaign's launch-bound application
     profile into a reverse proxy on a port from AITMPROXY_PORT_RANGE (one
@@ -542,6 +549,88 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /clients:
+    post:
+      operationId: createClient
+      summary: Create a client (operator)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClientInput" }
+            example: { name: "Acme Inc", contact_email: "ciso@acme.com", notes: "Priority customer" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Client" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { description: Name already exists for the tenant, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+    get:
+      operationId: listClients
+      summary: List the caller's tenant clients, newest first (operator)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Client" } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /clients/{id}:
+    get:
+      operationId: getClient
+      summary: Get a client in the caller's tenant (operator)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Client" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: patchClient
+      summary: Partially update a client (operator)
+      description: >
+        Partial update: an absent field is left unchanged. Sending contact_email
+        as an empty string (or whitespace) clears it to null.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClientPatch" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Client" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Name already exists for the tenant, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+    delete:
+      operationId: deleteClient
+      summary: Delete a client (operator)
+      description: >
+        Refused with 409 while any engagement references the client (unbind or
+        delete those engagements first).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: Referenced by one or more engagements, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
   /engagements:
     post:
@@ -2034,13 +2123,42 @@ components:
         (see effective_status) and are not stored; stored values are draft,
         pending_authorization, authorized, terminated.
       enum: [draft, pending_authorization, authorized, active, expired, terminated]
+    ClientInput:
+      type: object
+      required: [name]
+      description: Create body for a client. Only name is required.
+      properties:
+        name:          { type: string, description: "Unique per tenant; 1..200 characters." }
+        contact_email: { type: string, format: email, nullable: true }
+        notes:         { type: string, nullable: true }
+    ClientPatch:
+      type: object
+      description: >
+        Partial update. Any omitted field is left unchanged; contact_email set
+        to "" (or whitespace) clears it to null.
+      properties:
+        name:          { type: string, description: "1..200 characters; unique per tenant." }
+        contact_email: { type: string, nullable: true }
+        notes:         { type: string, nullable: true }
+    Client:
+      type: object
+      description: A first-class, tenant-scoped customer record.
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        name:          { type: string }
+        contact_email: { type: string, nullable: true }
+        notes:         { type: string, nullable: true }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
     EngagementInput:
       type: object
       required: [name, client_name]
-      description: Create/patch body for an engagement.
+      description: Create/patch body for an engagement. client_id is optional.
       properties:
         name:             { type: string, description: Unique per tenant. }
         client_name:      { type: string }
+        client_id:        { type: string, format: uuid, nullable: true, description: Optional link to a /clients record in the same tenant. }
         roe_reference:    { type: string, nullable: true, description: Rules-of-Engagement document id/URL. }
         authorized_scope:
           type: array
@@ -2059,6 +2177,7 @@ components:
         tenant_id:        { type: string, format: uuid }
         name:             { type: string }
         client_name:      { type: string }
+        client_id:        { type: string, format: uuid, nullable: true }
         status:           { $ref: "#/components/schemas/EngagementStatus" }
         effective_status:
           { $ref: "#/components/schemas/EngagementStatus" }

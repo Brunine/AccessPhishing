@@ -20,6 +20,7 @@ import (
 	"phishforge/internal/auth"
 	"phishforge/internal/campaign"
 	"phishforge/internal/candidate"
+	"phishforge/internal/client"
 	"phishforge/internal/contact"
 	"phishforge/internal/crypto"
 	"phishforge/internal/dnsdiag"
@@ -113,6 +114,7 @@ type Server struct {
 	appProfiles  *profiles.Repository
 	tenants      *tenant.Repository
 	campaigns    *campaign.Repository
+	clients      *client.Repository
 	engagements  *engagement.Repository
 	domains      *domain.Repository
 	candidates   *candidate.Repository
@@ -199,6 +201,7 @@ func NewServer(d Deps) *Server {
 		appProfiles:  profiles.NewRepository(),
 		tenants:      tenant.NewRepository(),
 		campaigns:    campaign.NewRepository(),
+		clients:      client.NewRepository(),
 		engagements:  engagement.NewRepository(),
 		domains:      domain.NewRepository(),
 		candidates:   candidate.NewRepository(),
@@ -285,6 +288,17 @@ func (s *Server) Router() http.Handler {
 				r.Get("/{id}/report", s.campaignReport)
 				r.Get("/{id}/report.csv", s.campaignReportCSV)
 				r.Get("/{id}/report.pdf", s.campaignReportPDF)
+			})
+
+			// M8a clients: first-class customer records. CRUD is operator
+			// (admin inherits). A client cannot be deleted while any engagement
+			// references it (409). Tenant-scoped: a cross-tenant id is 404.
+			r.Route("/clients", func(r chi.Router) {
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/", s.listClients)
+				r.With(auth.RequireRole(auth.RoleOperator)).Post("/", s.createClient)
+				r.With(auth.RequireRole(auth.RoleOperator)).Get("/{id}", s.getClient)
+				r.With(auth.RequireRole(auth.RoleOperator)).Patch("/{id}", s.patchClient)
+				r.With(auth.RequireRole(auth.RoleOperator)).Delete("/{id}", s.deleteClient)
 			})
 
 			// M8a engagements: the authorization container for campaigns. List/
