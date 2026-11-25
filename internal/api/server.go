@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -90,6 +92,13 @@ type Deps struct {
 	// (M5) bind one-per-campaign. A zero/invalid range defaults to 9100–9199.
 	AITMProxyPortMin int
 	AITMProxyPortMax int
+	// AITMProxyCloneDir is the base directory for per-campaign login-page clones
+	// (M5 Phase 2). Empty defaults to a temp directory (tests); production sets
+	// it from AITMPROXY_CLONE_DIR.
+	AITMProxyCloneDir string
+	// AITMProxyCloneTimeout bounds each clone fetch of the upstream login page.
+	// Zero defaults to 15s.
+	AITMProxyCloneTimeout time.Duration
 }
 
 // Server holds dependencies shared by HTTP handlers.
@@ -129,6 +138,8 @@ type Server struct {
 	osintResults *osintresult.Repository
 	users        *user.Repository
 	aitm         *aitmproxy.Manager
+	cloneDir     string
+	cloneHTTP    *http.Client
 }
 
 // NewServer constructs an API server from its dependencies.
@@ -148,6 +159,23 @@ func NewServer(d Deps) *Server {
 	qrECLevel := d.QRECLevel
 	if qrECLevel == "" {
 		qrECLevel = "M"
+	}
+	cloneDir := d.AITMProxyCloneDir
+	if cloneDir == "" {
+		cloneDir = filepath.Join(os.TempDir(), "phishforge-aitm-clones")
+	}
+	cloneTimeout := d.AITMProxyCloneTimeout
+	if cloneTimeout <= 0 {
+		cloneTimeout = 15 * time.Second
+	}
+	// The clone fetcher never follows redirects (SSRF-safe: it only ever requests
+	// the profile-declared login_page_url; a redirect to another host is refused
+	// and surfaces as a fetch failure).
+	cloneHTTP := &http.Client{
+		Timeout: cloneTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	// Engine adapter registry. The builtin local-subprocess adapter is the
 	// only driver this milestone; it is kind-agnostic, so it is installed as
@@ -196,6 +224,8 @@ func NewServer(d Deps) *Server {
 		osintResults: osintresult.NewRepository(),
 		users:        user.NewRepository(),
 		aitm:         aitmproxy.NewManager(d.AITMProxyPortMin, d.AITMProxyPortMax, nil),
+		cloneDir:     cloneDir,
+		cloneHTTP:    cloneHTTP,
 	}
 }
 

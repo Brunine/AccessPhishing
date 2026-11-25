@@ -60,6 +60,10 @@ type Config struct {
 	// one listener per running campaign. AITMPROXY_PORT_RANGE is "min-max".
 	AITMProxyPortMin int
 	AITMProxyPortMax int
+	// AITMProxyCloneDir is the base directory for per-campaign login-page clones
+	// (M5 Phase 2); AITMProxyCloneTimeout bounds each upstream fetch.
+	AITMProxyCloneDir     string
+	AITMProxyCloneTimeout time.Duration
 
 	// QR / quishing (M9b): on-the-fly QR-code rendering of per-recipient
 	// tracking URLs. Size is the PNG edge in pixels; EC level is L|M|Q|H.
@@ -155,6 +159,8 @@ func Load() (Config, error) {
 		IMAPUseTLS:   getenv("IMAP_USE_TLS", "true") == "true",
 	}
 	c.AITMProxyPortMin, c.AITMProxyPortMax = parsePortRange(getenv("AITMPROXY_PORT_RANGE", "9100-9199"))
+	c.AITMProxyCloneDir = getenv("AITMPROXY_CLONE_DIR", "data/aitm-clones")
+	c.AITMProxyCloneTimeout = getenvDuration("AITMPROXY_CLONE_TIMEOUT", 15*time.Second)
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: DATABASE_URL is required")
 	}

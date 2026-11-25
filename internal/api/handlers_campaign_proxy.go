@@ -23,7 +23,7 @@ import (
 // proxy therefore cannot widen the capture boundary. Best-effort, like the
 // public tracking path: an unattributable capture (stale token, rejected
 // transition) is dropped, never surfaced to the victim's connection.
-func (s *Server) Capture(ctx context.Context, kind, token string, payload map[string]any, ts time.Time) {
+func (s *Server) Capture(ctx context.Context, kind, token string, payload, provenance map[string]any, ts time.Time) {
 	var evType events.Type
 	switch kind {
 	case aitmproxy.KindCreds:
@@ -37,7 +37,7 @@ func (s *Server) Capture(ctx context.Context, kind, token string, payload map[st
 	if err != nil {
 		return
 	}
-	_, _ = s.ingestCapture(ctx, evType, token, ts, raw, "proxy")
+	_, _ = s.ingestCapture(ctx, evType, token, ts, raw, "proxy", provenance)
 }
 
 // --- M5 Phase 1 AiTM proxy lifecycle (operator, tenant-scoped, audited) ----
@@ -124,15 +124,36 @@ func (s *Server) startCampaignProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase 2: generate the login-page clone BEFORE binding a listener. This runs
+	// only after the profile checksum/InstantiateFlow gate above. A reserved
+	// clone strategy (llm_assisted) -> 501; an upstream fetch failure -> fail
+	// closed (502), with no listener left serving a placeholder.
+	if err := inst.GenerateClone(r.Context(), s.cloneHTTP, s.cloneDir, id.String()); err != nil {
+		switch {
+		case errors.Is(err, aitmproxy.ErrCloneStrategyUnsupported):
+			httpx.Problem(w, r, http.StatusNotImplemented, "not implemented",
+				"CLONE-STRATEGY-UNSUPPORTED: clone_strategy is not supported at runtime (mirror/template only)")
+		case errors.Is(err, aitmproxy.ErrUpstreamFetch):
+			httpx.Problem(w, r, http.StatusBadGateway, "bad gateway",
+				"could not fetch the upstream login page to clone: "+err.Error())
+		default:
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "generate clone")
+		}
+		return
+	}
+
 	state, err := s.aitm.Start(id.String(), inst)
 	switch {
 	case errors.Is(err, aitmproxy.ErrAlreadyRunning):
+		inst.Cleanup()
 		httpx.Problem(w, r, http.StatusConflict, "conflict", "a proxy is already running for this campaign")
 		return
 	case errors.Is(err, aitmproxy.ErrNoPort):
+		inst.Cleanup()
 		httpx.Problem(w, r, http.StatusServiceUnavailable, "unavailable", "no free proxy port in the configured range")
 		return
 	case err != nil:
+		inst.Cleanup()
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "start proxy")
 		return
 	}
@@ -140,7 +161,7 @@ func (s *Server) startCampaignProxy(w http.ResponseWriter, r *http.Request) {
 	if err := audit.Write(r.Context(), s.pool, audit.Entry{
 		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
 		Action: "campaign.proxy.start", TargetType: "campaign", TargetID: id.String(),
-		Metadata: map[string]any{"profile_id": profileID.String(), "port": state.Port, "upstream": state.Upstream},
+		Metadata: map[string]any{"profile_id": profileID.String(), "port": state.Port, "upstream": state.Upstream, "clone_snapshot_hash": state.CloneSnapshotHash},
 	}); err != nil {
 		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "audit write")
 		return

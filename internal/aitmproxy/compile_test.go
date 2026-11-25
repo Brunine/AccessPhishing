@@ -180,13 +180,14 @@ type fakeSink struct {
 }
 
 type sinkCall struct {
-	kind    string
-	token   string
-	payload map[string]any
+	kind       string
+	token      string
+	payload    map[string]any
+	provenance map[string]any
 }
 
-func (f *fakeSink) Capture(_ context.Context, kind, token string, payload map[string]any, _ time.Time) {
-	f.calls = append(f.calls, sinkCall{kind: kind, token: token, payload: payload})
+func (f *fakeSink) Capture(_ context.Context, kind, token string, payload, provenance map[string]any, _ time.Time) {
+	f.calls = append(f.calls, sinkCall{kind: kind, token: token, payload: payload, provenance: provenance})
 }
 
 // respWith builds a response carrying a token in its request context (as the

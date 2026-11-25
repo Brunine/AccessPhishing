@@ -87,18 +87,20 @@ func main() {
 	}
 
 	apiServer := api.NewServer(api.Deps{
-		Pool:             pool,
-		BaseURL:          cfg.BaseURL,
-		Cipher:           cipher,
-		Enqueuer:         enqueuer,
-		LLM:              llmClient,
-		Engines:          engManager,
-		OSINT:            osintClient,
-		DiagTimeout:      cfg.DNSDiagTimeout,
-		QRSize:           cfg.QRSize,
-		QRECLevel:        cfg.QRECLevel,
-		AITMProxyPortMin: cfg.AITMProxyPortMin,
-		AITMProxyPortMax: cfg.AITMProxyPortMax,
+		Pool:                  pool,
+		BaseURL:               cfg.BaseURL,
+		Cipher:                cipher,
+		Enqueuer:              enqueuer,
+		LLM:                   llmClient,
+		Engines:               engManager,
+		OSINT:                 osintClient,
+		DiagTimeout:           cfg.DNSDiagTimeout,
+		QRSize:                cfg.QRSize,
+		QRECLevel:             cfg.QRECLevel,
+		AITMProxyPortMin:      cfg.AITMProxyPortMin,
+		AITMProxyPortMax:      cfg.AITMProxyPortMax,
+		AITMProxyCloneDir:     cfg.AITMProxyCloneDir,
+		AITMProxyCloneTimeout: cfg.AITMProxyCloneTimeout,
 	})
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
