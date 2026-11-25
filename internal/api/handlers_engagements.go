@@ -20,6 +20,7 @@ import (
 type engagementBody struct {
 	Name            string     `json:"name"`
 	ClientName      string     `json:"client_name"`
+	ClientID        *uuid.UUID `json:"client_id"`
 	RoERef          *string    `json:"roe_reference"`
 	AuthorizedScope []string   `json:"authorized_scope"`
 	StartsAt        *time.Time `json:"starts_at"`
@@ -29,9 +30,28 @@ type engagementBody struct {
 
 func (b engagementBody) toInput() engagement.Input {
 	return engagement.Input{
-		Name: b.Name, ClientName: b.ClientName, RoERef: b.RoERef,
+		Name: b.Name, ClientName: b.ClientName, ClientID: b.ClientID, RoERef: b.RoERef,
 		AuthorizedScope: b.AuthorizedScope, StartsAt: b.StartsAt, ExpiresAt: b.ExpiresAt, Notes: b.Notes,
 	}
+}
+
+// resolveClientID verifies an optional client_id binding resolves to a client
+// in the same tenant, writing a 400 problem and returning false otherwise. A
+// nil clientID (no binding) is always allowed.
+func (s *Server) resolveClientID(w http.ResponseWriter, r *http.Request, q db.Querier, tenantID uuid.UUID, clientID *uuid.UUID) bool {
+	if clientID == nil {
+		return true
+	}
+	ok, err := s.clients.Exists(r.Context(), q, tenantID, *clientID)
+	if err != nil {
+		httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "resolve client")
+		return false
+	}
+	if !ok {
+		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "client_id does not resolve to a client in this tenant")
+		return false
+	}
+	return true
 }
 
 // validate checks the shared field rules for create/patch.
@@ -67,6 +87,10 @@ func (s *Server) createEngagement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+
+	if !s.resolveClientID(w, r, tx, p.TenantID, b.ClientID) {
+		return
+	}
 
 	e, err := s.engagements.Create(r.Context(), tx, p.TenantID, p.UserID, b.toInput())
 	if err != nil {
@@ -153,6 +177,9 @@ func (s *Server) patchEngagement(w http.ResponseWriter, r *http.Request) {
 	}
 	if !cur.CanEdit() {
 		httpx.Problem(w, r, http.StatusConflict, "conflict", "a terminated engagement cannot be edited")
+		return
+	}
+	if !s.resolveClientID(w, r, tx, p.TenantID, b.ClientID) {
 		return
 	}
 

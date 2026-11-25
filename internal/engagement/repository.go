@@ -17,6 +17,7 @@ import (
 type Input struct {
 	Name            string
 	ClientName      string
+	ClientID        *uuid.UUID
 	RoERef          *string
 	AuthorizedScope []string
 	StartsAt        *time.Time
@@ -31,7 +32,7 @@ type Repository struct{}
 // NewRepository returns an engagement repository.
 func NewRepository() *Repository { return &Repository{} }
 
-const cols = `id, tenant_id, name, client_name, status, roe_reference, authorized_scope,
+const cols = `id, tenant_id, name, client_name, client_id, status, roe_reference, authorized_scope,
               authorized_at, authorized_by, starts_at, expires_at, notes, created_by, created_at, updated_at`
 
 func scan(row pgx.Row) (Engagement, error) {
@@ -39,12 +40,17 @@ func scan(row pgx.Row) (Engagement, error) {
 		e        Engagement
 		scopeRaw []byte
 		authBy   uuid.NullUUID
+		clientID uuid.NullUUID
 	)
 	if err := row.Scan(
-		&e.ID, &e.TenantID, &e.Name, &e.ClientName, &e.Status, &e.RoERef, &scopeRaw,
+		&e.ID, &e.TenantID, &e.Name, &e.ClientName, &clientID, &e.Status, &e.RoERef, &scopeRaw,
 		&e.AuthorizedAt, &authBy, &e.StartsAt, &e.ExpiresAt, &e.Notes, &e.CreatedBy, &e.CreatedAt, &e.UpdatedAt,
 	); err != nil {
 		return Engagement{}, err
+	}
+	if clientID.Valid {
+		id := clientID.UUID
+		e.ClientID = &id
 	}
 	e.AuthorizedScope = []string{}
 	if len(scopeRaw) > 0 {
@@ -78,11 +84,11 @@ func (r *Repository) Create(ctx context.Context, q db.Querier, tenantID, created
 		return Engagement{}, err
 	}
 	const sql = `INSERT INTO engagements
-	    (tenant_id, name, client_name, roe_reference, authorized_scope, starts_at, expires_at, notes, created_by)
-	    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
+	    (tenant_id, name, client_name, client_id, roe_reference, authorized_scope, starts_at, expires_at, notes, created_by)
+	    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
 	    RETURNING ` + cols
 	e, err := scan(q.QueryRow(ctx, sql,
-		tenantID, in.Name, in.ClientName, in.RoERef, scope, in.StartsAt, in.ExpiresAt, in.Notes, createdBy))
+		tenantID, in.Name, in.ClientName, in.ClientID, in.RoERef, scope, in.StartsAt, in.ExpiresAt, in.Notes, createdBy))
 	if err != nil {
 		return Engagement{}, fmt.Errorf("engagement: create: %w", err)
 	}
@@ -132,12 +138,12 @@ func (r *Repository) Update(ctx context.Context, q db.Querier, tenantID, id uuid
 		return Engagement{}, err
 	}
 	const sql = `UPDATE engagements
-	    SET name = $3, client_name = $4, roe_reference = $5, authorized_scope = $6::jsonb,
-	        starts_at = $7, expires_at = $8, notes = $9, updated_at = now()
+	    SET name = $3, client_name = $4, client_id = $5, roe_reference = $6, authorized_scope = $7::jsonb,
+	        starts_at = $8, expires_at = $9, notes = $10, updated_at = now()
 	    WHERE tenant_id = $1 AND id = $2
 	    RETURNING ` + cols
 	e, err := scan(q.QueryRow(ctx, sql,
-		tenantID, id, in.Name, in.ClientName, in.RoERef, scope, in.StartsAt, in.ExpiresAt, in.Notes))
+		tenantID, id, in.Name, in.ClientName, in.ClientID, in.RoERef, scope, in.StartsAt, in.ExpiresAt, in.Notes))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Engagement{}, ErrNotFound
 	}

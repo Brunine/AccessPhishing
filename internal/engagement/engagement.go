@@ -66,6 +66,7 @@ type Engagement struct {
 	TenantID        uuid.UUID  `json:"tenant_id"`
 	Name            string     `json:"name"`
 	ClientName      string     `json:"client_name"`
+	ClientID        *uuid.UUID `json:"client_id,omitempty"`
 	Status          Status     `json:"status"`
 	RoERef          *string    `json:"roe_reference,omitempty"`
 	AuthorizedScope []string   `json:"authorized_scope"`
