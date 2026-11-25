@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -54,6 +55,11 @@ type Config struct {
 
 	// DNS/TLS diagnostics (domain inventory). Bounds each lookup/dial.
 	DNSDiagTimeout time.Duration
+
+	// M5 AiTM proxy: the TCP port range the in-process reverse proxies bind,
+	// one listener per running campaign. AITMPROXY_PORT_RANGE is "min-max".
+	AITMProxyPortMin int
+	AITMProxyPortMax int
 
 	// QR / quishing (M9b): on-the-fly QR-code rendering of per-recipient
 	// tracking URLs. Size is the PNG edge in pixels; EC level is L|M|Q|H.
@@ -148,10 +154,25 @@ func Load() (Config, error) {
 		IMAPMailbox:  getenv("IMAP_MAILBOX", "INBOX"),
 		IMAPUseTLS:   getenv("IMAP_USE_TLS", "true") == "true",
 	}
+	c.AITMProxyPortMin, c.AITMProxyPortMax = parsePortRange(getenv("AITMPROXY_PORT_RANGE", "9100-9199"))
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: DATABASE_URL is required")
 	}
 	return c, nil
+}
+
+// parsePortRange parses a "min-max" TCP port range. An unparseable or inverted
+// range falls back to 9100–9199 so the AiTM proxy always has a usable window.
+func parsePortRange(s string) (min, max int) {
+	parts := strings.SplitN(s, "-", 2)
+	if len(parts) == 2 {
+		lo, errLo := strconv.Atoi(strings.TrimSpace(parts[0]))
+		hi, errHi := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if errLo == nil && errHi == nil && lo > 0 && hi >= lo && hi <= 65535 {
+			return lo, hi
+		}
+	}
+	return 9100, 9199
 }
 
 func getenvInt(key string, def int) int {

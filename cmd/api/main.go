@@ -86,20 +86,23 @@ func main() {
 		logger.Warn("OSINT_BASE_URL not set; /osint endpoints disabled")
 	}
 
+	apiServer := api.NewServer(api.Deps{
+		Pool:             pool,
+		BaseURL:          cfg.BaseURL,
+		Cipher:           cipher,
+		Enqueuer:         enqueuer,
+		LLM:              llmClient,
+		Engines:          engManager,
+		OSINT:            osintClient,
+		DiagTimeout:      cfg.DNSDiagTimeout,
+		QRSize:           cfg.QRSize,
+		QRECLevel:        cfg.QRECLevel,
+		AITMProxyPortMin: cfg.AITMProxyPortMin,
+		AITMProxyPortMax: cfg.AITMProxyPortMax,
+	})
 	srv := &http.Server{
-		Addr: cfg.APIAddr,
-		Handler: api.NewServer(api.Deps{
-			Pool:        pool,
-			BaseURL:     cfg.BaseURL,
-			Cipher:      cipher,
-			Enqueuer:    enqueuer,
-			LLM:         llmClient,
-			Engines:     engManager,
-			OSINT:       osintClient,
-			DiagTimeout: cfg.DNSDiagTimeout,
-			QRSize:      cfg.QRSize,
-			QRECLevel:   cfg.QRECLevel,
-		}).Router(),
+		Addr:              cfg.APIAddr,
+		Handler:           apiServer.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -116,6 +119,8 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	// Tear down any live AiTM proxies before the API server itself.
+	apiServer.AITMProxies().StopAll(shutdownCtx)
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)

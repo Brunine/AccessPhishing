@@ -1,8 +1,17 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.15.0
+  version: 0.16.0
   description: >
+    0.16.0 adds M5 Phase 1: the in-process AiTM reverse proxy. POST
+    /campaigns/{id}/proxy/start compiles the campaign's launch-bound application
+    profile into a reverse proxy on a port from AITMPROXY_PORT_RANGE (one
+    listener per campaign), fail-closed on an unauthorized engagement (403),
+    missing bound profile (409), or a reserved auth/MFA method (409/501 — same
+    mapping as launch). POST /proxy/stop tears it down; GET /proxy/status reports
+    running state. Captured login fields and hijacked session cookies are
+    recorded NAMES-ONLY via the existing engine-events ingest boundary
+    (source="proxy"), stamped with the campaign's frozen profile checksum.
     0.14.0 adds M9b QR / quishing: a per-campaign `channel` (email|qr, default
     email), a `scanned` victim-state-machine step that slots in before clicked
     (scanned -> clicked -> creds -> ...), GET /campaigns/{id}/qrcodes returning
@@ -409,6 +418,59 @@ paths:
                         token:         { type: string }
                         state:         { type: string, enum: [pending, sent, delivered, opened, clicked, creds, session_hijacked, post_exploitation, bounced, failed] }
                         last_event_at: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}/proxy/start:
+    post:
+      operationId: startCampaignProxy
+      summary: Start the campaign's AiTM reverse proxy (operator)
+      description: >
+        M5 Phase 1. Compiles the campaign's launch-bound application profile
+        (campaigns.app_profile_id) into an in-process reverse proxy and binds a
+        port from AITMPROXY_PORT_RANGE (one listener per campaign). Fail closed:
+        the campaign must be bound to an authorized, unexpired engagement (403
+        unbound/unauthorized, 409 expired/terminated) and to a runtime-supported
+        profile — a reserved auth method -> 409 (AUTH-METHOD-UNSUPPORTED), a
+        reserved MFA mode -> 501 (MFA-METHOD-UNSUPPORTED), no bound profile ->
+        409. Audited campaign.proxy.start.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Proxy running, content: { application/json: { schema: { $ref: "#/components/schemas/ProxyStatus" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "501": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}/proxy/stop:
+    post:
+      operationId: stopCampaignProxy
+      summary: Stop the campaign's AiTM reverse proxy (operator)
+      description: >
+        M5 Phase 1. Gracefully tears down the running proxy and frees its port.
+        409 when no proxy is running for the campaign. Audited campaign.proxy.stop.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Proxy stopped, content: { application/json: { schema: { $ref: "#/components/schemas/ProxyStatus" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /campaigns/{id}/proxy/status:
+    get:
+      operationId: campaignProxyStatus
+      summary: AiTM reverse proxy running state (operator)
+      description: Read-only. Reports whether a proxy is live for the campaign and, if so, its bound address/port and upstream.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProxyStatus" } } } }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
@@ -2325,6 +2387,18 @@ components:
         is_default:    { type: boolean }
         created_at:    { type: string, format: date-time }
         updated_at:    { type: string, format: date-time }
+    ProxyStatus:
+      type: object
+      description: >
+        M5 AiTM proxy running state for a campaign. running is false when no
+        proxy is live; the remaining fields are present only while running.
+      properties:
+        running:    { type: boolean }
+        addr:       { type: string, description: "host:port the listener is bound to" }
+        port:       { type: integer, description: allocated port from AITMPROXY_PORT_RANGE }
+        started_at: { type: string, format: date-time }
+        upstream:   { type: string, description: "scheme://host:port the proxy forwards to (the real login origin)" }
+      required: [running]
     AppProfile:
       type: object
       description: >
