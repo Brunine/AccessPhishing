@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
+	"phishforge/internal/audit"
 	"phishforge/internal/auth"
 	"phishforge/internal/dnsdiag"
 	"phishforge/internal/domain"
@@ -87,22 +89,64 @@ func (s *Server) domainDiagnostics(w http.ResponseWriter, r *http.Request) {
 	var tlsInfo *dnsdiag.TLSInfo
 	tctx, tcancel := context.WithTimeout(r.Context(), s.diagTimeout)
 	defer tcancel()
-	if info, err := dnsdiag.TLS(tctx, d.Name, 443, s.diagTimeout); err != nil {
-		errs = append(errs, "tls: "+err.Error())
+	now := time.Now().UTC()
+	info, tlsErr := s.tlsInspect(tctx, d.Name, 443, s.diagTimeout)
+	var derivedTLS string
+	if tlsErr != nil {
+		errs = append(errs, "tls: "+tlsErr.Error())
+		derivedTLS = domain.DeriveTLSStatus(tlsErr, time.Time{}, s.tlsThreshold, now)
 	} else {
 		tlsInfo = &info
 		if !info.CoversDomain {
 			warnings = append(warnings, "TLS certificate does not cover the domain")
 		}
+		derivedTLS = domain.DeriveTLSStatus(nil, info.NotAfter, s.tlsThreshold, now)
+	}
+
+	// Persist the derived tls_status, and audit, ONLY when it differs from the
+	// stored value. The domain lifecycle status is never touched from TLS.
+	if d.TLSStatus == nil || *d.TLSStatus != derivedTLS {
+		if err := s.persistTLSStatus(r, p, d, derivedTLS); err != nil {
+			httpx.Problem(w, r, http.StatusInternalServerError, "internal error", "persist tls status")
+			return
+		}
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"domain":    d.Name,
-		"status":    string(d.Status),
-		"dns":       dns,
-		"tls":       tlsInfo,
-		"ownership": map[string]any{"verified": ownershipVerified},
-		"warnings":  warnings,
-		"errors":    errs,
+		"domain":     d.Name,
+		"status":     string(d.Status),
+		"dns":        dns,
+		"tls":        tlsInfo,
+		"tls_status": derivedTLS,
+		"ownership":  map[string]any{"verified": ownershipVerified},
+		"warnings":   warnings,
+		"errors":     errs,
 	})
+}
+
+// persistTLSStatus writes the derived tls_status and an audit entry (from/to)
+// in one transaction, so the change and its audit trail commit together. Called
+// only when the derived value differs from what is stored.
+func (s *Server) persistTLSStatus(r *http.Request, p auth.Principal, d domain.Domain, derived string) error {
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(r.Context())
+
+	if err := s.domains.UpdateTLSStatus(r.Context(), tx, p.TenantID, d.ID, derived); err != nil {
+		return err
+	}
+	var from any
+	if d.TLSStatus != nil {
+		from = *d.TLSStatus
+	}
+	if err := audit.Write(r.Context(), tx, audit.Entry{
+		TenantID: p.TenantID, ActorID: p.UserID, ActorEmail: p.Email,
+		Action: "domain.tls_status", TargetType: "domain", TargetID: d.ID.String(),
+		Metadata: map[string]any{"from": from, "to": derived},
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(r.Context())
 }

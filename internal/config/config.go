@@ -56,6 +56,14 @@ type Config struct {
 	// DNS/TLS diagnostics (domain inventory). Bounds each lookup/dial.
 	DNSDiagTimeout time.Duration
 
+	// Domain expiry roll (M8b hardening). The worker periodically rolls domains
+	// whose registration has lapsed (expires_at in the past) to 'expired'.
+	DomainExpiryRollInterval time.Duration
+	DomainExpiryRollDisabled bool
+	// DomainTLSExpiringThreshold is how close to cert expiry (NotAfter) a domain's
+	// derived tls_status flips from 'valid' to 'expiring' during diagnostics.
+	DomainTLSExpiringThreshold time.Duration
+
 	// M5 AiTM proxy: the TCP port range the in-process reverse proxies bind,
 	// one listener per running campaign. AITMPROXY_PORT_RANGE is "min-max".
 	AITMProxyPortMin int
@@ -136,6 +144,10 @@ func Load() (Config, error) {
 		OSINTTimeout: getenvDuration("OSINT_TIMEOUT", 30*time.Second),
 
 		DNSDiagTimeout: getenvDuration("DNS_DIAG_TIMEOUT", 10*time.Second),
+
+		DomainExpiryRollInterval:   getenvDuration("DOMAIN_EXPIRY_ROLL_INTERVAL", time.Hour),
+		DomainExpiryRollDisabled:   getenv("DOMAIN_EXPIRY_ROLL_DISABLED", "false") == "true",
+		DomainTLSExpiringThreshold: getenvDuration("DOMAIN_TLS_EXPIRING_THRESHOLD", 30*24*time.Hour),
 
 		QRSize:    getenvInt("QR_SIZE", 256),
 		QRECLevel: getenv("QR_EC_LEVEL", "M"),
