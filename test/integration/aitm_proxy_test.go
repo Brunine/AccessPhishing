@@ -28,13 +28,25 @@ type fakeUpstream struct {
 func (u *fakeUpstream) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/owa/auth/logon.aspx", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// Clone source: the real login page. The form action is an absolute
+			// upstream URL (rewritten to the proxy login path by the clone).
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, `<!doctype html><html><head><title>Sign in</title>`+
+				`<link rel="stylesheet" href="http://`+r.Host+`/owa/theme.css"></head><body>`+
+				`<form method="post" action="http://`+r.Host+`/owa/auth/logon.aspx">`+
+				`<input name="username"><input name="password"><input name="flags" type="hidden" value="4">`+
+				`</form><a href="/owa/help">Help</a></body></html>`)
+			return
+		}
+		// POST: the capture target. Successful upstream login sets the session
+		// cookie the profile watches.
 		body, _ := io.ReadAll(r.Body)
 		u.mu.Lock()
 		u.lastBody = string(body)
 		u.lastPFT = r.URL.Query().Get("_pft")
 		u.hits++
 		u.mu.Unlock()
-		// Successful upstream login: set the session cookie the profile watches.
 		http.SetCookie(w, &http.Cookie{Name: "cadata", Value: "UPSTREAM-SECRET-COOKIE", Path: "/"})
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -85,9 +97,11 @@ proxy:
 }
 
 type proxyState struct {
-	Running bool   `json:"running"`
-	Addr    string `json:"addr"`
-	Port    int    `json:"port"`
+	Running           bool   `json:"running"`
+	Addr              string `json:"addr"`
+	Port              int    `json:"port"`
+	CloneSnapshotHash string `json:"clone_snapshot_hash"`
+	UpstreamFetchOK   bool   `json:"upstream_fetch_ok"`
 }
 
 func TestAiTMProxyFormCaptureE2E(t *testing.T) {
@@ -131,10 +145,34 @@ func TestAiTMProxyFormCaptureE2E(t *testing.T) {
 	if !st.Running || st.Addr == "" {
 		t.Fatalf("proxy state not running: %+v", st)
 	}
+	// Phase 2: the clone was generated at start.
+	if len(st.CloneSnapshotHash) != 64 || !st.UpstreamFetchOK {
+		t.Fatalf("clone not generated at start: %+v", st)
+	}
 
-	// Status endpoint reflects running.
-	if c, b := do(t, srv.URL, http.MethodGet, "/api/v1/campaigns/"+camp.String()+"/proxy/status", opTok, nil); c != http.StatusOK || !strings.Contains(b, `"running":true`) {
-		t.Fatalf("proxy status: want running true, got %d (%s)", c, b)
+	// Status endpoint reflects running + the clone snapshot.
+	if c, b := do(t, srv.URL, http.MethodGet, "/api/v1/campaigns/"+camp.String()+"/proxy/status", opTok, nil); c != http.StatusOK || !strings.Contains(b, `"running":true`) || !strings.Contains(b, st.CloneSnapshotHash) {
+		t.Fatalf("proxy status: want running true + clone hash, got %d (%s)", c, b)
+	}
+
+	// Phase 2: GET / serves the rendered clone with the victim token injected
+	// into the login form action (replacing the generation-time sentinel).
+	cloneResp, err := http.Get("http://" + st.Addr + "/?_pft=" + url.QueryEscape(token))
+	if err != nil {
+		t.Fatalf("GET clone root: %v", err)
+	}
+	cloneBody, _ := io.ReadAll(cloneResp.Body)
+	_ = cloneResp.Body.Close()
+	cs := string(cloneBody)
+	if !strings.Contains(cs, `action="/owa/auth/logon.aspx?_pft=`+token+`"`) {
+		t.Fatalf("clone form action not rewritten to login path with token:\n%s", cs)
+	}
+	if strings.Contains(cs, "__PFT_TOKEN__") {
+		t.Fatalf("token sentinel leaked into served clone:\n%s", cs)
+	}
+	// The upstream-absolute stylesheet was rewritten to proxy through.
+	if !strings.Contains(cs, `href="/owa/theme.css"`) {
+		t.Fatalf("clone asset not proxied to root-relative:\n%s", cs)
 	}
 
 	// --- POST the captured login form THROUGH the proxy ---
@@ -164,25 +202,31 @@ func TestAiTMProxyFormCaptureE2E(t *testing.T) {
 		t.Fatalf("victim token must be stripped before upstream, got _pft=%q", gotPFT)
 	}
 
-	// --- creds event: names-only, source=proxy, checksum-stamped ---
-	credFields, credSource, credChecksum := credsRow(t, ctx, pool, camp)
+	// --- creds event: names-only, source=proxy, profile + clone stamped ---
+	credFields, credSource, credChecksum, credClone := credsRow(t, ctx, pool, camp)
 	if credSource != "proxy" {
 		t.Fatalf("creds source: want proxy, got %q", credSource)
 	}
 	if credChecksum != profChecksum {
 		t.Fatalf("creds checksum stamp: want %s, got %s", profChecksum, credChecksum)
 	}
+	if credClone != st.CloneSnapshotHash {
+		t.Fatalf("creds clone_snapshot_hash: want %s, got %s", st.CloneSnapshotHash, credClone)
+	}
 	if credFields != "password,username" { // sorted names only — never 'flags' (capture:false), never values
 		t.Fatalf("creds fields: want \"password,username\", got %q", credFields)
 	}
 
 	// --- session_hijacked event: cookie NAMES only, source=proxy, stamped ---
-	sessCookies, sessHost, sessSource, sessChecksum := sessionRow(t, ctx, pool, camp)
+	sessCookies, sessHost, sessSource, sessChecksum, sessClone := sessionRow(t, ctx, pool, camp)
 	if sessSource != "proxy" {
 		t.Fatalf("session source: want proxy, got %q", sessSource)
 	}
 	if sessChecksum != profChecksum {
 		t.Fatalf("session checksum stamp: want %s, got %s", profChecksum, sessChecksum)
+	}
+	if sessClone != st.CloneSnapshotHash {
+		t.Fatalf("session clone_snapshot_hash: want %s, got %s", st.CloneSnapshotHash, sessClone)
 	}
 	if sessCookies != "cadata" {
 		t.Fatalf("session cookies: want \"cadata\" (name only), got %q", sessCookies)
@@ -268,6 +312,27 @@ func TestAiTMProxyStartFailClosed(t *testing.T) {
 		t.Fatalf("start push profile: want 501 MFA-METHOD-UNSUPPORTED, got %d (%s)", c, b)
 	}
 
+	// 5) llm_assisted clone strategy -> 501 at proxy start (fail closed). The
+	// profile is form/none (launchable) but its clone strategy is unsupported.
+	llmID := mustImport(t, srv.URL, opTok, cloneStrategyProfile("owa-llm", "https://outlook.office.com/owa/auth/logon.aspx", "llm_assisted"))
+	llmCamp := mustCampaign(t, srv.URL, opTok, "llm-proxy", engID)
+	bindProfileSQL(t, ctx, pool, llmCamp, llmID)
+	if c, b := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns/"+llmCamp.String()+"/proxy/start", opTok, nil); c != http.StatusNotImplemented {
+		t.Fatalf("start llm_assisted clone: want 501, got %d (%s)", c, b)
+	}
+
+	// 6) Upstream fetch failure at startup -> 502 fail closed; no listener left
+	// serving a placeholder.
+	ffID := mustImport(t, srv.URL, opTok, cloneStrategyProfile("owa-ff", "http://127.0.0.1:1/owa/auth/logon.aspx", "mirror"))
+	ffCamp := mustCampaign(t, srv.URL, opTok, "fetchfail-proxy", engID)
+	bindProfileSQL(t, ctx, pool, ffCamp, ffID)
+	if c, b := do(t, srv.URL, http.MethodPost, "/api/v1/campaigns/"+ffCamp.String()+"/proxy/start", opTok, nil); c != http.StatusBadGateway {
+		t.Fatalf("start with unreachable upstream: want 502, got %d (%s)", c, b)
+	}
+	if c, b := do(t, srv.URL, http.MethodGet, "/api/v1/campaigns/"+ffCamp.String()+"/proxy/status", opTok, nil); c != http.StatusOK || !strings.Contains(b, `"running":false`) {
+		t.Fatalf("failed-fetch start must leave no listener, got %d (%s)", c, b)
+	}
+
 	// 4) Cross-tenant start is a 404 (campaign not visible to the other tenant).
 	otherTn := mkTenant(t, ctx, pool, "OtherFailCo")
 	otherOp := createUser(t, ctx, pool, otherTn.ID, "op@otherfail.test", "operator")
@@ -279,6 +344,36 @@ func TestAiTMProxyStartFailClosed(t *testing.T) {
 
 // --- helpers --------------------------------------------------------------
 
+// cloneStrategyProfile builds a launchable form profile with a chosen
+// login_page_url + clone_strategy (for the clone-generation gates).
+func cloneStrategyProfile(name, loginPageURL, strategy string) string {
+	return fmt.Sprintf(`
+version: 1
+metadata:
+  name: %s
+auth:
+  login_path: /owa/auth/logon.aspx
+  method: form
+  fields:
+    - selector: input[name=username]
+      upstream_field: username
+      capture: true
+session:
+  success_indicators:
+    - type: cookie_set
+      name: cadata
+  token_locations:
+    - in: cookie
+      name: cadata
+mfa:
+  mode: none
+phishing_facet:
+  login_page_url: %s
+  clone_strategy: %s
+  asset_policy: proxy
+`, name, loginPageURL, strategy)
+}
+
 func bindProfileSQL(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID, profileID uuid.UUID) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `UPDATE campaigns SET app_profile_id=$2 WHERE id=$1`, campaignID, profileID); err != nil {
@@ -286,32 +381,32 @@ func bindProfileSQL(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campa
 	}
 }
 
-func credsRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID uuid.UUID) (fields, source, checksum string) {
+func credsRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID uuid.UUID) (fields, source, checksum, cloneHash string) {
 	t.Helper()
 	var f []string
 	err := pool.QueryRow(ctx,
 		`SELECT array(SELECT jsonb_array_elements_text(metadata->'fields') ORDER BY 1),
-		        metadata->>'source', metadata->>'profile_checksum'
+		        metadata->>'source', metadata->>'profile_checksum', COALESCE(metadata->>'clone_snapshot_hash','')
 		 FROM events WHERE campaign_id=$1 AND type='creds' ORDER BY occurred_at DESC LIMIT 1`,
-		campaignID).Scan(&f, &source, &checksum)
+		campaignID).Scan(&f, &source, &checksum, &cloneHash)
 	if err != nil {
 		t.Fatalf("read creds row: %v", err)
 	}
-	return strings.Join(f, ","), source, checksum
+	return strings.Join(f, ","), source, checksum, cloneHash
 }
 
-func sessionRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID uuid.UUID) (cookies, host, source, checksum string) {
+func sessionRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, campaignID uuid.UUID) (cookies, host, source, checksum, cloneHash string) {
 	t.Helper()
 	var c []string
 	err := pool.QueryRow(ctx,
 		`SELECT array(SELECT jsonb_array_elements_text(metadata->'cookies') ORDER BY 1),
-		        metadata->>'host', metadata->>'source', metadata->>'profile_checksum'
+		        metadata->>'host', metadata->>'source', metadata->>'profile_checksum', COALESCE(metadata->>'clone_snapshot_hash','')
 		 FROM events WHERE campaign_id=$1 AND type='session_hijacked' ORDER BY occurred_at DESC LIMIT 1`,
-		campaignID).Scan(&c, &host, &source, &checksum)
+		campaignID).Scan(&c, &host, &source, &checksum, &cloneHash)
 	if err != nil {
 		t.Fatalf("read session row: %v", err)
 	}
-	return strings.Join(c, ","), host, source, checksum
+	return strings.Join(c, ","), host, source, checksum, cloneHash
 }
 
 // netSplit extracts the host (without port) from an http URL.

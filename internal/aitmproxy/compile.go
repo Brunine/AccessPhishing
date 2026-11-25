@@ -79,6 +79,17 @@ type Compiled struct {
 	// NeedsBody is true when any indicator is body_regex (the only case the
 	// response body must be read for success detection).
 	NeedsBody bool
+	// LoginPageURL is phishing_facet.login_page_url — the real page cloned at
+	// proxy start (M5 Phase 2). It is the only URL the clone fetcher ever
+	// requests, and its host always equals Upstream.Host (SSRF-safe by design).
+	LoginPageURL string
+	// CloneStrategy is phishing_facet.clone_strategy (mirror | template |
+	// llm_assisted). Phase 2 serves mirror/template via a static transform;
+	// llm_assisted is runtime-unsupported (proxy start fails closed, 501).
+	CloneStrategy string
+	// AssetPolicy is phishing_facet.asset_policy (proxy | inline | strip) —
+	// how the clone's asset references are rewritten.
+	AssetPolicy string
 }
 
 // errCompile wraps a compilation failure so the caller fails closed.
@@ -231,6 +242,9 @@ func Compile(spec map[string]any) (Compiled, error) {
 		return Compiled{}, fmt.Errorf("%w: %v", errCompile, err)
 	}
 	c.Upstream = up
+	c.LoginPageURL = lpu
+	c.CloneStrategy, _ = facet["clone_strategy"].(string)
+	c.AssetPolicy, _ = facet["asset_policy"].(string)
 
 	return c, nil
 }

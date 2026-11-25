@@ -34,6 +34,10 @@ type RunState struct {
 	Port      int       `json:"port,omitempty"`       // allocated port
 	StartedAt time.Time `json:"started_at,omitempty"` // when the listener came up
 	Upstream  string    `json:"upstream,omitempty"`   // scheme://host:port forwarded to
+	// Clone snapshot (M5 Phase 2): the login-page clone generated at start.
+	CloneSnapshotHash string    `json:"clone_snapshot_hash,omitempty"`
+	CloneGeneratedAt  time.Time `json:"clone_generated_at,omitempty"`
+	UpstreamFetchOK   bool      `json:"upstream_fetch_ok,omitempty"`
 }
 
 // Manager owns the in-process AiTM proxies, one listener per campaign, with
@@ -149,6 +153,8 @@ func (m *Manager) Stop(ctx context.Context, campaignID string) error {
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	err := r.srv.Shutdown(sctx)
+	// Remove the campaign's generated clone assets once the listener is down.
+	r.inst.Cleanup()
 	m.logger.Info("aitmproxy stopped", "campaign", campaignID, "port", r.port)
 	return err
 }
@@ -192,11 +198,15 @@ func (m *Manager) StopAll(ctx context.Context) {
 // stateLocked builds a RunState from a running entry (caller holds m.mu).
 func (m *Manager) stateLocked(r *running) RunState {
 	up := r.inst.compiled.Upstream
+	hash, generatedAt, fetchOK, _ := r.inst.CloneInfo()
 	return RunState{
-		Running:   true,
-		Addr:      r.ln.Addr().String(),
-		Port:      r.port,
-		StartedAt: r.startedAt,
-		Upstream:  fmt.Sprintf("%s://%s:%d", up.Scheme, up.Host, up.Port),
+		Running:           true,
+		Addr:              r.ln.Addr().String(),
+		Port:              r.port,
+		StartedAt:         r.startedAt,
+		Upstream:          fmt.Sprintf("%s://%s:%d", up.Scheme, up.Host, up.Port),
+		CloneSnapshotHash: hash,
+		CloneGeneratedAt:  generatedAt,
+		UpstreamFetchOK:   fetchOK,
 	}
 }

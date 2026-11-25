@@ -1,8 +1,18 @@
 openapi: 3.1.0
 info:
   title: PhishForge Orchestrator API
-  version: 0.16.0
+  version: 0.17.0
   description: >
+    0.17.0 adds M5 Phase 2: AiTM clone rendering. Proxy start now generates a
+    static clone of the campaign's phishing_facet login page (fetched from the
+    profile's upstream host, bounded, redirect-free), rewrites it so the login
+    form POSTs to the proxy capture path and internal links keep the token, and
+    serves it at the proxy root (the Phase 1 placeholder is gone). A reserved
+    clone_strategy (llm_assisted) fails start closed with 501; an upstream fetch
+    failure fails closed with 502 (no listener). GET /campaigns/{id}/proxy/status
+    gains clone_snapshot_hash, clone_generated_at, and upstream_fetch_ok, and the
+    snapshot hash is stamped onto creds/session_hijacked events alongside
+    profile_checksum. No new endpoints.
     0.16.0 adds M5 Phase 1: the in-process AiTM reverse proxy. POST
     /campaigns/{id}/proxy/start compiles the campaign's launch-bound application
     profile into a reverse proxy on a port from AITMPROXY_PORT_RANGE (one
@@ -427,14 +437,16 @@ paths:
       operationId: startCampaignProxy
       summary: Start the campaign's AiTM reverse proxy (operator)
       description: >
-        M5 Phase 1. Compiles the campaign's launch-bound application profile
-        (campaigns.app_profile_id) into an in-process reverse proxy and binds a
-        port from AITMPROXY_PORT_RANGE (one listener per campaign). Fail closed:
-        the campaign must be bound to an authorized, unexpired engagement (403
+        M5. Compiles the campaign's launch-bound application profile
+        (campaigns.app_profile_id) into an in-process reverse proxy, generates a
+        static clone of the phishing_facet login page, and binds a port from
+        AITMPROXY_PORT_RANGE (one listener per campaign). Fail closed: the
+        campaign must be bound to an authorized, unexpired engagement (403
         unbound/unauthorized, 409 expired/terminated) and to a runtime-supported
         profile — a reserved auth method -> 409 (AUTH-METHOD-UNSUPPORTED), a
-        reserved MFA mode -> 501 (MFA-METHOD-UNSUPPORTED), no bound profile ->
-        409. Audited campaign.proxy.start.
+        reserved MFA mode or clone_strategy=llm_assisted -> 501, no bound profile
+        -> 409. If the upstream login page cannot be fetched/cloned at start ->
+        502 (no listener is left running). Audited campaign.proxy.start.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -444,6 +456,7 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "501": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
   /campaigns/{id}/proxy/stop:
@@ -2398,6 +2411,9 @@ components:
         port:       { type: integer, description: allocated port from AITMPROXY_PORT_RANGE }
         started_at: { type: string, format: date-time }
         upstream:   { type: string, description: "scheme://host:port the proxy forwards to (the real login origin)" }
+        clone_snapshot_hash: { type: string, description: "sha256 hex of the login-page clone generated at start (M5 Phase 2); also stamped onto capture events" }
+        clone_generated_at:  { type: string, format: date-time, description: when the clone was generated }
+        upstream_fetch_ok:   { type: boolean, description: whether the upstream login page was fetched successfully at start }
       required: [running]
     AppProfile:
       type: object
